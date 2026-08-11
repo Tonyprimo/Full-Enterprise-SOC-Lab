@@ -1,0 +1,12 @@
+# Enterprise SOC Asset Inventory
+
+| Hostname | Role | OS | Domain | Status |
+|---|---|---|---|---|
+| DC01 | Domain Controller / DNS | Windows Server 2022 | corp.lab | Active |
+| WIN11-01 | Corporate Workstation | Windows 11 Enterprise | corp.lab | Active |
+| SIEM01 | Splunk SIEM | Windows Server 2022 | N/A | Active |
+| WIN11-02 | Corporate Workstation | Windows 11 Enterprise | corp.lab | Planned |
+| KALI01 | Adversary Simulation | Kali Linux | N/A | Planned |
+| FW01 | Firewall / Router | pfSense | N/A | Planned |
+| IDS01 | Network IDS | TBD | N/A | Planned |
+| LINUX01 | Enterprise Linux Server | Ubuntu Server | corp.lab | Future |
