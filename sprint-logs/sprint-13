@@ -1,0 +1,61 @@
+# Sprint 13 — SOC Architecture Expansion & Baseline
+
+## Objective
+
+Establish a known-good baseline of the existing Enterprise SOC environment and prepare the architecture for expansion into a multi-layer Security Operations Center lab.
+
+## Existing Infrastructure
+
+| Host | Role | Operating System |
+|---|---|---|
+| DC01 | Domain Controller / DNS | Windows Server 2022 |
+| WIN11-01 | Enterprise Workstation | Windows 11 Enterprise |
+| SIEM01 | Splunk SIEM | Windows Server 2022 |
+
+## Baseline Validation
+
+The following components were validated before expansion:
+
+- Active Directory
+- DNS
+- Group Policy
+- Sysmon
+- Windows Security logging
+- PowerShell logging
+- Splunk Universal Forwarder
+- Splunk Enterprise ingestion
+- SIEM searches and telemetry visibility
+
+## Architecture Expansion
+
+The following systems are planned:
+
+- WIN11-02 — Additional enterprise endpoint
+- KALI01 — Controlled adversary simulation platform
+- FW01 — pfSense firewall
+- IDS01 — Network intrusion detection
+- LINUX01 — Future Linux enterprise workload
+
+## Network Segmentation
+
+Future network segmentation was designed using:
+
+- CORP-LAN
+- ATTACK-NET
+- Firewall-controlled routing
+
+Existing production lab networking remained unchanged during this sprint.
+
+## Security Operations Goal
+
+The expanded environment is designed to support an end-to-end SOC workflow:
+
+Attack → Telemetry → Detection → Alert → Triage → Investigation → Containment → Remediation → Documentation
+
+## Validation
+
+The existing environment remained operational following Sprint 13 preparation.
+
+## Outcome
+
+Sprint 13 established a stable baseline and architecture plan for expanding the existing detection-engineering environment into a complete SOC operations lab.
