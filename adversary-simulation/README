@@ -1,0 +1,31 @@
+# Adversary Simulation
+
+This directory documents controlled adversary-emulation exercises conducted against systems owned and operated within the Enterprise SOC Lab.
+
+## Platform
+
+KALI01 serves as the dedicated adversary-simulation workstation.
+
+## Network
+
+KALI01 is initially isolated on:
+
+- Network: ATTACK-NET
+- VMware Network: VMnet3
+- Subnet: 10.10.20.0/24
+- Address: 10.10.20.10
+
+Routing into the corporate network will be introduced through the lab firewall in a later sprint.
+
+## Purpose
+
+The adversary-simulation environment will be used to:
+
+- Generate controlled malicious telemetry
+- Validate SIEM detections
+- Exercise SOC alert triage
+- Validate MITRE ATT&CK coverage
+- Conduct threat-hunting exercises
+- Test incident-response procedures
+
+All testing is restricted to systems owned and operated within the documented lab environment.
