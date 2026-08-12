@@ -1,0 +1,74 @@
+# Sprint 15 — Controlled Adversary Simulation Platform
+
+## Objective
+
+Deploy a dedicated Kali Linux system for controlled adversary simulation within the Enterprise SOC Lab.
+
+## System Deployed
+
+| Host | Role | Network |
+|---|---|---|
+| KALI01 | Adversary Simulation | ATTACK-NET |
+
+## Configuration
+
+KALI01 was configured with:
+
+- Kali Linux
+- VMware guest integration
+- Updated operating system packages
+- Dedicated lab workspace
+- Static network configuration
+- Isolated virtual networking
+- Defined testing scope and Rules of Engagement
+
+## Network Configuration
+
+KALI01:
+
+- Address: 10.10.20.10/24
+- VMware Network: VMnet3
+- Segment: ATTACK-NET
+
+VMnet3 has no VMware DHCP service and no host virtual adapter.
+
+KALI01 currently has no route to the enterprise corporate environment.
+
+## Isolation
+
+The adversary platform was intentionally isolated from both the corporate network and external networks during initial deployment.
+
+Controlled inter-network routing will be introduced through the firewall architecture in a later sprint.
+
+## Adversary Simulation Workspace
+
+The following directory structure was created:
+
+soc-lab/
+- notes/
+- payloads/
+- results/
+- scripts/
+
+## Security Tooling
+
+Core utilities available on KALI01 were inventoried for later controlled testing.
+
+## Rules of Engagement
+
+Authorized testing boundaries were documented to ensure adversary simulations remain confined to systems owned and operated as part of the lab.
+
+## Validation
+
+The following were verified:
+
+- Kali operating system functionality
+- VMware guest integration
+- Static ATTACK-NET address
+- Network configuration persistence
+- Corporate-network isolation
+- External-network isolation
+
+## Outcome
+
+Sprint 15 established a dedicated and isolated adversary-simulation platform that will later generate controlled malicious behavior for SOC detection, investigation, and incident-response exercises.
