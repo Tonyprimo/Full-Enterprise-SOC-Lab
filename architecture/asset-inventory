@@ -6,7 +6,7 @@
 | WIN11-01 | Corporate Workstation | Windows 11 Enterprise | corp.lab | Active |
 | SIEM01 | Splunk SIEM | Windows Server 2022 | N/A | Active |
 | WIN11-02 | Corporate Workstation | Windows 11 Enterprise | corp.lab | Active |
-| KALI01 | Adversary Simulation | Kali Linux | N/A | Planned |
+| KALI01 | Adversary Simulation | Kali Linux | N/A | Active |
 | FW01 | Firewall / Router | pfSense | N/A | Planned |
 | IDS01 | Network IDS | TBD | N/A | Planned |
 | LINUX01 | Enterprise Linux Server | Ubuntu Server | corp.lab | Future |
