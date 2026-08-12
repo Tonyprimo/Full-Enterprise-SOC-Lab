@@ -1,0 +1,67 @@
+# Sprint 14 — Second Enterprise Endpoint
+
+## Objective
+
+Deploy a second enterprise Windows workstation into the corp.lab Active Directory environment and integrate it into the existing SOC telemetry pipeline.
+
+## System Deployed
+
+| Hostname | Role | Domain |
+|---|---|---|
+| WIN11-02 | Corporate Workstation | corp.lab |
+
+## Configuration
+
+WIN11-02 was configured with:
+
+- Windows 11
+- VMware Tools
+- Static IPv4 addressing
+- Active Directory domain membership
+- Corporate Group Policy
+- Windows Security auditing
+- PowerShell operational logging
+- Sysmon endpoint telemetry
+- Splunk Universal Forwarder
+
+## Active Directory Integration
+
+WIN11-02 was joined to corp.lab and moved into the existing workstation organizational unit to inherit the same security policies as WIN11-01.
+
+Domain authentication, DNS resolution, Group Policy processing, and domain controller discovery were validated.
+
+## Endpoint Telemetry
+
+The endpoint provides multiple telemetry sources to the SOC:
+
+- Windows Security Event Log
+- Sysmon Operational Log
+- PowerShell Operational Log
+
+## SIEM Integration
+
+Splunk Universal Forwarder was installed and configured to send endpoint telemetry to SIEM01.
+
+Forwarder configuration was validated using Splunk btool before service restart.
+
+## Validation
+
+The following were confirmed in Splunk:
+
+- WIN11-02 appeared as an active monitored host.
+- Windows Security events were searchable.
+- Sysmon process telemetry was searchable.
+- PowerShell telemetry was searchable.
+- Successful authentication events were visible.
+- Failed authentication events were visible.
+- Existing detections were capable of monitoring the new endpoint.
+
+## SOC Architecture Improvement
+
+The lab now contains multiple enterprise endpoints monitored by a centralized SIEM.
+
+This allows future attack scenarios to distinguish between normal activity, compromised systems, and cross-host behavior.
+
+## Outcome
+
+WIN11-02 was successfully deployed as the second fully monitored corporate endpoint in the Enterprise SOC environment.
