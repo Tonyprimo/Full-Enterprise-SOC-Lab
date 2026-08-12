@@ -1,0 +1,47 @@
+# Enterprise SOC Lab — Rules of Engagement
+
+## Purpose
+
+The adversary-simulation environment exists solely to generate controlled security telemetry and validate detection and response capabilities within the Enterprise SOC Lab.
+
+## Authorized Systems
+
+Testing is restricted to explicitly documented lab systems, including:
+
+- DC01
+- WIN11-01
+- WIN11-02
+- SIEM01
+- KALI01
+- FW01
+- Other systems added explicitly to the lab inventory
+
+## Authorized Networks
+
+Primary lab networks:
+
+- CORP-LAN — 10.10.10.0/24
+- ATTACK-NET — 10.10.20.0/24
+
+The legacy VMware lab network may only be used when specifically required by a documented sprint.
+
+## Restrictions
+
+Testing must not target:
+
+- Public Internet systems
+- The physical home network
+- Employer systems
+- Third-party infrastructure
+- Systems not explicitly included in the lab inventory
+
+## Operational Approach
+
+Adversary activity will be:
+
+1. Planned
+2. Mapped to a defined security objective or MITRE ATT&CK technique
+3. Executed against an authorized lab target
+4. Observed through collected telemetry
+5. Investigated through the SIEM
+6. Documented as a security exercise
