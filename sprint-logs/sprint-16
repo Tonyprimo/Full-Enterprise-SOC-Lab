@@ -1,0 +1,70 @@
+# Sprint 16 — pfSense Firewall & Network Segmentation
+
+## Objective
+
+Deploy pfSense into the SOC home lab to introduce network segmentation between the existing corporate lab environment and a dedicated attacker network.
+
+This sprint establishes **KALI01** as a segmented attack workstation behind **FW01**, allowing future attack simulations to traverse a firewall rather than originating directly from the corporate network.
+
+---
+
+## Lab Architecture
+
+### FW01 — pfSense CE 2.8.1
+
+| Interface | NIC | Network | IP Address | Purpose |
+|---|---|---|---|---|
+| WAN | em0 | VMware NAT | DHCP | External connectivity |
+| LAN | em1 | LAB_NET | 10.10.10.1/24 | Internal firewall network |
+| ATTACK_NET | em2 | ATTACK_NET | 10.10.20.1/24 | Isolated attacker network |
+
+### KALI01
+
+| Setting | Value |
+|---|---|
+| Hostname | KALI01 |
+| Interface | eth0 |
+| IP Address | 10.10.20.10/24 |
+| Default Gateway | 10.10.20.1 |
+| Network | ATTACK_NET |
+
+---
+
+## Tasks Completed
+
+### 1. Deployed FW01
+
+Created a dedicated pfSense virtual machine named `FW01`.
+
+Installed:
+
+- pfSense CE 2.8.1
+- ZFS filesystem
+- Single virtual-disk ZFS stripe
+
+Configured three virtual network interfaces to support WAN, internal LAN, and attacker-network traffic.
+
+---
+
+### 2. Configured pfSense Interfaces
+
+Configured the firewall with the following topology:
+
+```text
+                    VMware NAT
+                        |
+                        |
+                    WAN / em0
+                        |
+                 +-------------+
+                 |    FW01     |
+                 |   pfSense   |
+                 +-------------+
+                   /         \
+                  /           \
+          LAN / em1         em2 / ATTACK_NET
+        10.10.10.1         10.10.20.1
+                               |
+                               |
+                            KALI01
+                          10.10.20.10
