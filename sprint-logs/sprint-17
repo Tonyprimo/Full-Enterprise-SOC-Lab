@@ -1,0 +1,723 @@
+# Sprint 17 — Network Segmentation and Firewall Validation
+
+## Objective
+
+The objective of Sprint 17 was to transition the SOC home lab from a primarily flat VMware NAT network into a segmented architecture protected by a pfSense firewall.
+
+The sprint focused on:
+
+- Migrating corporate systems to a dedicated CORP-LAN
+- Isolating the Kali Linux attack workstation on a separate ATTACK_NET
+- Routing traffic between networks through pfSense
+- Restoring Active Directory connectivity after the network migration
+- Updating Splunk forwarding for the new addressing scheme
+- Implementing least-privilege firewall rules
+- Validating permitted and denied traffic
+- Troubleshooting traffic at multiple layers using firewall logs, packet captures, and rule counters
+
+---
+
+## Final Network Architecture
+
+```text
+                         VMware NAT
+                             |
+                             |
+                           WAN
+                             |
+                        +----+----+
+                        |  FW01   |
+                        | pfSense |
+                        +----+----+
+                             |
+                 +-----------+-----------+
+                 |                       |
+              CORP-LAN                ATTACK_NET
+            10.10.10.0/24            10.10.20.0/24
+                 |                       |
+        +--------+--------+              |
+        |        |        |              |
+      DC01     SIEM01   Windows        KALI01
+      .10       .20     Endpoints       .10
+                         |
+                    +----+----+
+                    |         |
+                 WIN11-01  WIN11-02
+                   .101      .102
+```
+
+### Network Segments
+
+| Network | Subnet | Purpose |
+|---|---|---|
+| VMware NAT / WAN | 192.168.184.0/24 | External/upstream connectivity for FW01 |
+| CORP-LAN | 10.10.10.0/24 | Domain, SIEM, and corporate Windows systems |
+| ATTACK_NET | 10.10.20.0/24 | Isolated security-testing network |
+
+---
+
+## System Addressing
+
+| System | Role | IP Address | Network |
+|---|---|---:|---|
+| FW01 | pfSense Firewall — WAN | DHCP / 192.168.184.x | VMware NAT |
+| FW01 | pfSense Firewall — LAN | 10.10.10.1 | CORP-LAN |
+| FW01 | pfSense Firewall — ATTACK_NET | 10.10.20.1 | ATTACK_NET |
+| DC01 | Active Directory / DNS | 10.10.10.10 | CORP-LAN |
+| SIEM01 | Splunk Enterprise | 10.10.10.20 | CORP-LAN |
+| WIN11-01 | Domain Workstation | 10.10.10.101 | CORP-LAN |
+| WIN11-02 | Domain Workstation | 10.10.10.102 | CORP-LAN |
+| KALI01 | Security Testing Workstation | 10.10.20.10 | ATTACK_NET |
+
+---
+
+# Implementation
+
+## 1. pfSense Network Segmentation
+
+FW01 was configured with three network interfaces:
+
+```text
+WAN         -> VMware NAT
+LAN         -> 10.10.10.1/24
+ATTACK_NET  -> 10.10.20.1/24
+```
+
+This placed pfSense between the corporate systems and the isolated testing network.
+
+The resulting trust boundaries are:
+
+```text
+ATTACK_NET
+     |
+     |
+     v
+   FW01
+     |
+     |
+     v
+CORP-LAN
+```
+
+Traffic crossing these boundaries is subject to firewall policy.
+
+---
+
+## 2. CORP-LAN Migration
+
+Corporate systems were migrated from the original VMware NAT network to:
+
+```text
+10.10.10.0/24
+```
+
+Systems were assigned the following addresses:
+
+```text
+DC01       10.10.10.10
+SIEM01     10.10.10.20
+WIN11-01   10.10.10.101
+WIN11-02   10.10.10.102
+```
+
+The pfSense LAN interface became the default gateway:
+
+```text
+10.10.10.1
+```
+
+Domain-connected Windows systems use DC01 for DNS:
+
+```text
+10.10.10.10
+```
+
+---
+
+## 3. Active Directory Validation
+
+After migration, domain connectivity was tested from the Windows endpoints.
+
+One workstation initially reported a broken secure channel.
+
+Testing included:
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+The workstation's connectivity to DC01 and domain services was restored and the secure channel was validated.
+
+An important operational observation was that domain-dependent tests require DC01 to be running. A failed secure-channel test while the domain controller is offline does not necessarily indicate that the workstation trust relationship itself is damaged.
+
+---
+
+## 4. Splunk Migration
+
+SIEM01 was migrated to:
+
+```text
+10.10.10.20
+```
+
+Splunk Universal Forwarder configurations on Windows endpoints were updated to use the new Splunk receiver address.
+
+Example:
+
+```ini
+[tcpout]
+defaultGroup = default-autolb-group
+
+[tcpout:default-autolb-group]
+server = 10.10.10.20:9997
+
+[tcpout-server://10.10.10.20:9997]
+```
+
+Connectivity was validated against:
+
+```text
+TCP/9997
+```
+
+The Splunk receiver was confirmed listening on the expected port.
+
+Firewall configuration was also validated when endpoint-to-SIEM connectivity initially failed.
+
+---
+
+# ATTACK_NET Configuration
+
+KALI01 was isolated on:
+
+```text
+10.10.20.0/24
+```
+
+Configuration:
+
+```text
+IP Address:      10.10.20.10
+Subnet:          255.255.255.0
+Default Gateway: 10.10.20.1
+```
+
+Routing was validated using:
+
+```bash
+ip addr
+ip route
+```
+
+KALI01 therefore resides on a separate network from all corporate systems.
+
+---
+
+# Firewall Policy
+
+The design follows a least-privilege model.
+
+ATTACK_NET was not granted unrestricted access to CORP-LAN.
+
+Instead, a narrowly scoped test rule was created.
+
+## Controlled ICMP Rule
+
+```text
+Action:       PASS
+Interface:    ATTACK_NET
+Protocol:     ICMP
+ICMP Type:    Echo Request
+
+Source:
+10.10.20.10
+KALI01
+
+Destination:
+10.10.10.102
+WIN11-02
+
+Logging:
+Enabled
+```
+
+Conceptually:
+
+```text
+KALI01
+10.10.20.10
+     |
+     | ICMP Echo Request
+     v
++----------+
+|   FW01   |
+| pfSense  |
++----------+
+     |
+     | Explicit PASS
+     v
+WIN11-02
+10.10.10.102
+```
+
+The rule permits the required test traffic without granting the entire ATTACK_NET unrestricted access to CORP-LAN.
+
+---
+
+# Windows Host Firewall
+
+Network firewall permission alone was not sufficient.
+
+WIN11-02 also required a narrowly scoped Windows Defender Firewall rule allowing ICMP from KALI01.
+
+The rule was created with:
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "LAB - Allow ICMP from KALI01" `
+  -Direction Inbound `
+  -Protocol ICMPv4 `
+  -IcmpType 8 `
+  -RemoteAddress 10.10.20.10 `
+  -Action Allow `
+  -Profile Any
+```
+
+This created defense-in-depth:
+
+```text
+KALI01
+   |
+   | ICMP
+   v
+pfSense Firewall
+   |
+   | Explicit permission
+   v
+Windows Firewall
+   |
+   | Explicit permission from KALI01
+   v
+WIN11-02
+```
+
+Both network and endpoint policy therefore control access.
+
+---
+
+# Validation
+
+## Firewall Rule Verification
+
+The active pfSense ruleset was inspected using:
+
+```sh
+pfctl -sr
+```
+
+The configured rule appeared in the active ruleset as a pass rule from:
+
+```text
+10.10.20.10
+```
+
+to:
+
+```text
+10.10.10.102
+```
+
+for ICMP echo requests.
+
+---
+
+## Rule Counter Validation
+
+Rule statistics were inspected using:
+
+```sh
+pfctl -vvsr
+```
+
+The firewall showed packets matching the KALI01-to-WIN11-02 rule.
+
+Example validation included:
+
+```text
+Packets:          > 0
+Bytes:            > 0
+State Creations:  > 0
+```
+
+This proved the rule was not merely configured — actual traffic was matching it.
+
+---
+
+## Packet Capture Validation
+
+During troubleshooting, traffic was captured on the CORP-LAN interface:
+
+```sh
+tcpdump -ni em1 icmp and host 10.10.10.102
+```
+
+The capture showed:
+
+```text
+10.10.20.10 -> 10.10.10.102
+ICMP Echo Request
+```
+
+Initially, no corresponding echo reply was observed.
+
+This demonstrated that:
+
+1. KALI01 generated the traffic.
+2. FW01 received the traffic on ATTACK_NET.
+3. The pfSense rule matched.
+4. pfSense forwarded the traffic onto CORP-LAN.
+5. The remaining problem existed at or beyond the destination endpoint.
+
+---
+
+# Troubleshooting Case Study
+
+## Problem
+
+KALI01 could not initially ping WIN11-02 despite an explicit pfSense rule permitting the traffic.
+
+```text
+KALI01
+10.10.20.10
+     |
+     | ICMP
+     v
+FW01
+     |
+     ?
+     v
+WIN11-02
+10.10.10.102
+```
+
+The initial result was:
+
+```text
+4 packets transmitted
+0 received
+100% packet loss
+```
+
+---
+
+## Step 1 — Validate FW01 to WIN11-02
+
+FW01 successfully pinged:
+
+```text
+10.10.10.102
+```
+
+Result:
+
+```text
+4 packets transmitted
+4 packets received
+0% packet loss
+```
+
+This proved the CORP-LAN path between FW01 and WIN11-02 was functional.
+
+---
+
+## Step 2 — Validate pfSense Rule
+
+The active ruleset was inspected:
+
+```sh
+pfctl -sr
+```
+
+The expected rule was present:
+
+```text
+KALI01 10.10.20.10
+        |
+        | ICMP
+        v
+WIN11-02 10.10.10.102
+```
+
+---
+
+## Step 3 — Inspect Rule Counters
+
+Using:
+
+```sh
+pfctl -vvsr
+```
+
+packet counters showed traffic matching the rule.
+
+This proved KALI01 traffic was reaching FW01 and matching the correct firewall policy.
+
+---
+
+## Step 4 — Capture Traffic
+
+Traffic leaving FW01 toward CORP-LAN was observed using:
+
+```sh
+tcpdump -ni em1 icmp and host 10.10.10.102
+```
+
+Echo requests were visible.
+
+Echo replies were not.
+
+This significantly narrowed the troubleshooting scope.
+
+---
+
+## Step 5 — Investigate Endpoint Policy
+
+Since:
+
+```text
+KALI01 -> FW01             PASS
+FW01 firewall rule         PASS
+FW01 -> CORP-LAN           PASS
+FW01 -> WIN11-02           REACHABLE
+```
+
+attention shifted to WIN11-02.
+
+A dedicated Windows Firewall rule was created permitting ICMPv4 Echo Requests only from:
+
+```text
+10.10.20.10
+```
+
+---
+
+## Resolution
+
+After applying the scoped Windows Firewall rule:
+
+```bash
+ping -c 4 10.10.10.102
+```
+
+succeeded from KALI01.
+
+Final path:
+
+```text
+KALI01
+10.10.20.10
+     |
+     | ICMP
+     v
+FW01 ATTACK_NET
+     |
+     | pfSense PASS
+     v
+FW01 CORP-LAN
+     |
+     v
+WIN11-02 Windows Firewall
+     |
+     | Allow from 10.10.20.10
+     v
+WIN11-02
+10.10.10.102
+
+SUCCESS
+```
+
+---
+
+# Segmentation Validation
+
+The final configuration demonstrated both permitted and restricted traffic.
+
+The security model is:
+
+```text
+ATTACK_NET
+10.10.20.0/24
+      |
+      | Default restricted access
+      v
+    FW01
+      |
+      +---- Explicit exceptions only
+      |
+      v
+CORP-LAN
+10.10.10.0/24
+```
+
+This prevents placement of a system on ATTACK_NET from automatically granting access to the corporate environment.
+
+---
+
+# Troubleshooting Methodology Demonstrated
+
+This sprint demonstrated a layered troubleshooting process:
+
+```text
+Connectivity Failure
+        |
+        v
+Verify IP Addressing
+        |
+        v
+Verify Routing
+        |
+        v
+Verify Firewall Rule
+        |
+        v
+Inspect pfctl Rule Counters
+        |
+        v
+Capture Traffic with tcpdump
+        |
+        v
+Determine Request/Reply Direction
+        |
+        v
+Investigate Endpoint Firewall
+        |
+        v
+Implement Scoped Rule
+        |
+        v
+Retest
+        |
+        v
+SUCCESS
+```
+
+This avoided making unnecessary configuration changes while progressively isolating the failure.
+
+---
+
+# Security Principles Demonstrated
+
+## Network Segmentation
+
+Corporate and security-testing systems operate on separate Layer 3 networks.
+
+## Least Privilege
+
+ATTACK_NET was not given unrestricted access to CORP-LAN.
+
+Only specifically required traffic was permitted.
+
+## Defense in Depth
+
+Traffic must satisfy both:
+
+1. pfSense network firewall policy
+2. Windows endpoint firewall policy
+
+## Default Deny
+
+Traffic not explicitly permitted from ATTACK_NET remains blocked.
+
+## Logging and Visibility
+
+Firewall logging and rule counters provide evidence of traffic matching security policy.
+
+## Packet-Level Troubleshooting
+
+Packet capture was used to identify exactly where communication stopped rather than relying solely on application-level connectivity tests.
+
+---
+
+# Tools Used
+
+- VMware Workstation Pro
+- pfSense 2.8.1
+- Windows Server 2022
+- Windows 11
+- Kali Linux
+- Active Directory Domain Services
+- DNS
+- Splunk Enterprise
+- Splunk Universal Forwarder
+- Sysmon
+- Windows Defender Firewall
+- PowerShell
+- pfctl
+- tcpdump
+- ping
+- netcat
+
+---
+
+# Skills Demonstrated
+
+- Network segmentation
+- Firewall architecture
+- pfSense administration
+- Stateful firewall policy
+- Least-privilege firewall configuration
+- Windows Defender Firewall administration
+- TCP/IP networking
+- Static IP configuration
+- Routing
+- DNS troubleshooting
+- Active Directory connectivity troubleshooting
+- Splunk forwarding
+- SIEM infrastructure migration
+- Packet capture
+- Firewall log analysis
+- Firewall rule counter analysis
+- Layered network troubleshooting
+- Security validation
+- Defense-in-depth architecture
+
+---
+
+# Evidence
+
+Recommended screenshots for this sprint:
+
+| Screenshot | Evidence |
+|---|---|
+| `01-corp-lan-validation.png` | Corporate endpoint addressing/routing |
+| `02-splunk-forwarding-validation.png` | Splunk connectivity after migration |
+| `03-kali-attack-net-routing.png` | KALI01 isolated on ATTACK_NET |
+| `04-pfsense-icmp-rule.png` | Scoped ATTACK_NET firewall rule |
+| `05-pfsense-active-rule.png` | Rule visible through pfctl |
+| `06-pfsense-rule-counter.png` | Traffic matching firewall rule |
+| `07-pfsense-tcpdump.png` | Packet capture during troubleshooting |
+| `08-kali-icmp-success.png` | Successful controlled cross-network traffic |
+| `09-pfsense-firewall-log.png` | Firewall logging/segmentation evidence |
+
+---
+
+# Sprint Outcome
+
+**Status: COMPLETE**
+
+Sprint 17 transformed the lab from a primarily flat virtual network into a segmented security architecture.
+
+The completed environment now contains:
+
+- Dedicated corporate network
+- Dedicated attack/testing network
+- pfSense security boundary
+- Controlled inter-network communication
+- Endpoint firewall enforcement
+- Active Directory services on CORP-LAN
+- Centralized Splunk infrastructure on CORP-LAN
+- Isolated Kali testing workstation
+- Firewall logging and validation capability
+- Packet-level troubleshooting capability
+
+The environment is now better suited for future attack simulation, detection engineering, firewall monitoring, and incident-response exercises.
