@@ -1,0 +1,712 @@
+# Sprint 18 — Centralized Firewall Logging & Network Security Monitoring
+
+## Objective
+
+The objective of Sprint 18 was to integrate the pfSense firewall with Splunk Enterprise and establish centralized network-security monitoring for the segmented SOC home lab.
+
+Sprint 17 introduced separate CORP-LAN and ATTACK_NET security zones protected by pfSense. Sprint 18 extended that architecture by forwarding firewall telemetry to the SIEM and using Splunk to monitor traffic crossing the security boundary.
+
+The sprint focused on:
+
+- Centralizing pfSense firewall logs in Splunk
+- Creating a dedicated network-security index
+- Configuring remote syslog between FW01 and SIEM01
+- Restricting syslog ingestion at the Windows host firewall
+- Validating end-to-end log delivery
+- Generating known permitted and blocked traffic
+- Identifying ATTACK_NET activity in Splunk
+- Creating reusable security searches
+- Building a Network Security Monitoring dashboard
+- Validating the complete network-monitoring pipeline
+
+---
+
+# Architecture
+
+## Network Architecture
+
+```text
+                         VMware NAT
+                             |
+                            WAN
+                             |
+                        +----+----+
+                        |  FW01   |
+                        | pfSense |
+                        +----+----+
+                             |
+                 +-----------+-----------+
+                 |                       |
+              CORP-LAN                ATTACK_NET
+            10.10.10.0/24            10.10.20.0/24
+                 |                       |
+        +--------+--------+              |
+        |        |        |              |
+      DC01     SIEM01   Windows        KALI01
+      .10       .20     Endpoints       .10
+                         |
+                    +----+----+
+                    |         |
+                 WIN11-01  WIN11-02
+                   .101      .102
+```
+
+## Security Monitoring Architecture
+
+```text
+KALI01
+10.10.20.10
+     |
+     | Network Activity
+     v
++----------+
+|   FW01   |
+| pfSense  |
++----------+
+     |
+     | Firewall Enforcement
+     |
+     +----------------------------+
+     |                            |
+     | UDP/5514 Syslog            | Routed Traffic
+     v                            v
++----------+                  CORP-LAN
+|  SIEM01  |
+|  Splunk  |
++----------+
+     |
+     +---- Search
+     |
+     +---- Detection
+     |
+     +---- Visualization
+     |
+     +---- Investigation
+```
+
+This architecture allows FW01 to serve two security functions:
+
+1. Enforce network access policy.
+2. Generate telemetry describing traffic crossing the security boundary.
+
+---
+
+# Systems
+
+| System | Role | IP Address | Network |
+|---|---|---:|---|
+| FW01 | pfSense Firewall — LAN | 10.10.10.1 | CORP-LAN |
+| FW01 | pfSense Firewall — ATTACK_NET | 10.10.20.1 | ATTACK_NET |
+| DC01 | Active Directory / DNS | 10.10.10.10 | CORP-LAN |
+| SIEM01 | Splunk Enterprise | 10.10.10.20 | CORP-LAN |
+| WIN11-01 | Domain Workstation | 10.10.10.101 | CORP-LAN |
+| WIN11-02 | Domain Workstation | 10.10.10.102 | CORP-LAN |
+| KALI01 | Security Testing Workstation | 10.10.20.10 | ATTACK_NET |
+
+---
+
+# Implementation
+
+## 1. Dedicated Splunk Network Index
+
+A dedicated Splunk index was created for network-security telemetry:
+
+```text
+network
+```
+
+Separating network telemetry from Windows endpoint logs provides cleaner data organization and simplifies firewall-focused searches.
+
+Example:
+
+```spl
+index=network
+```
+
+---
+
+## 2. Splunk Syslog Input
+
+Splunk Enterprise was configured to receive pfSense syslog traffic over:
+
+```text
+Protocol: UDP
+Port:     5514
+Index:    network
+```
+
+The resulting telemetry path is:
+
+```text
+FW01
+10.10.10.1
+     |
+     | UDP/5514
+     v
+SIEM01
+10.10.10.20
+     |
+     v
+Splunk
+index=network
+```
+
+The UDP listener was validated on SIEM01 before configuring the remote sender.
+
+---
+
+## 3. SIEM Host Firewall Configuration
+
+Windows Defender Firewall on SIEM01 was configured to permit the syslog traffic.
+
+Rather than allowing UDP/5514 from the entire network, the rule was restricted to FW01.
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "LAB - Allow pfSense Syslog" `
+  -Direction Inbound `
+  -Protocol UDP `
+  -LocalPort 5514 `
+  -RemoteAddress 10.10.10.1 `
+  -Action Allow `
+  -Profile Any
+```
+
+This permits:
+
+```text
+10.10.10.1 -> SIEM01:5514/UDP
+```
+
+without exposing the Splunk syslog listener unnecessarily to other hosts.
+
+---
+
+## 4. pfSense Remote Logging
+
+FW01 was configured to forward security telemetry to:
+
+```text
+10.10.10.20:5514
+```
+
+The LAN interface was used as the source for remote logging.
+
+Selected log categories included:
+
+- Firewall Events
+- System Events
+
+This provided firewall-security telemetry without forwarding every available pfSense log category.
+
+---
+
+# End-to-End Telemetry Pipeline
+
+The completed logging pipeline is:
+
+```text
+Network Activity
+      |
+      v
+   pfSense
+      |
+      | filterlog
+      v
+Remote Syslog
+ UDP/5514
+      |
+      v
+   SIEM01
+      |
+      v
+Splunk Enterprise
+      |
+      v
+index=network
+      |
+      +---- Searches
+      |
+      +---- Dashboards
+      |
+      +---- Investigation
+```
+
+---
+
+# Validation
+
+## 1. Connectivity Validation
+
+Before configuring remote logging, FW01 connectivity to SIEM01 was verified.
+
+```sh
+ping -c 4 10.10.10.20
+```
+
+This established that the network path between the firewall and SIEM was operational before application-layer troubleshooting began.
+
+---
+
+## 2. UDP Listener Validation
+
+SIEM01 was verified to be listening for syslog traffic on UDP/5514.
+
+```powershell
+Get-NetUDPEndpoint -LocalPort 5514
+```
+
+The listener confirmed that Splunk was prepared to receive remote firewall telemetry.
+
+---
+
+## 3. pfSense Event Ingestion
+
+After remote logging was enabled, Splunk was searched using:
+
+```spl
+index=network
+```
+
+pfSense events successfully appeared in the dedicated network index.
+
+Firewall-specific activity could be identified using:
+
+```spl
+index=network filterlog
+```
+
+This confirmed the complete telemetry path:
+
+```text
+FW01 -> UDP/5514 -> SIEM01 -> Splunk -> network index
+```
+
+---
+
+# Controlled Security Testing
+
+Known network traffic was generated from KALI01 to validate that firewall enforcement and SIEM visibility agreed.
+
+## Blocked Traffic Test
+
+KALI01 attempted to reach TCP/445 on a CORP-LAN system without a corresponding pfSense allow rule.
+
+Example:
+
+```bash
+nc -vz -w 3 10.10.10.20 445
+```
+
+The traffic represented:
+
+```text
+KALI01
+10.10.20.10
+     |
+     | TCP/445
+     v
++----------+
+|   FW01   |
+|  BLOCK   |
++----------+
+     X
+     |
+     v
+SIEM01
+10.10.10.20
+```
+
+The blocked activity was subsequently identified in Splunk.
+
+Example search:
+
+```spl
+index=network "10.10.20.10" "10.10.10.20" "445"
+```
+
+This demonstrated that denied firewall activity was visible to the SIEM.
+
+---
+
+## Permitted Traffic Test
+
+Sprint 17 established a controlled firewall exception permitting ICMP from:
+
+```text
+KALI01
+10.10.20.10
+```
+
+to:
+
+```text
+WIN11-02
+10.10.10.102
+```
+
+Test traffic was generated:
+
+```bash
+ping -c 4 10.10.10.102
+```
+
+The traffic successfully crossed the firewall according to the explicit security policy.
+
+The associated firewall telemetry was then located in Splunk:
+
+```spl
+index=network "10.10.20.10" "10.10.10.102"
+```
+
+This provided visibility into both sides of firewall enforcement:
+
+```text
+Unauthorized Traffic
+KALI01 -> SIEM01:445
+          BLOCK
+
+Authorized Test Traffic
+KALI01 -> WIN11-02:ICMP
+          PASS
+```
+
+---
+
+# ATTACK_NET Monitoring
+
+Because KALI01 resides on the isolated ATTACK_NET, firewall telemetry can be used to monitor activity originating from the security-testing environment.
+
+A reusable search was created:
+
+```spl
+index=network "10.10.20.10"
+```
+
+Saved Search:
+
+```text
+ATTACK_NET - All Firewall Activity
+```
+
+Purpose:
+
+> Displays pfSense firewall events associated with the isolated ATTACK_NET security-testing host.
+
+This provides a simple starting point for investigating traffic originating from KALI01.
+
+---
+
+# Blocked Traffic Monitoring
+
+A second search was created to focus on denied ATTACK_NET activity.
+
+```spl
+index=network "10.10.20.10" "block"
+```
+
+Saved Search:
+
+```text
+ATTACK_NET - Blocked Traffic
+```
+
+This allows denied connection attempts from the attack network to be reviewed separately from permitted traffic.
+
+---
+
+# Network Security Monitoring Dashboard
+
+A dedicated Splunk dashboard was created:
+
+```text
+Network Security Monitoring
+```
+
+The initial dashboard provides visibility into ATTACK_NET firewall activity.
+
+## ATTACK_NET Activity Over Time
+
+Search:
+
+```spl
+index=network "10.10.20.10"
+| timechart count
+```
+
+Visualization:
+
+```text
+Line Chart
+```
+
+Panel Title:
+
+```text
+ATTACK_NET Firewall Activity Over Time
+```
+
+This creates a time-based view of firewall events associated with the isolated security-testing host.
+
+---
+
+# Security Validation
+
+Sprint 18 demonstrated that firewall policy and SIEM telemetry could be correlated.
+
+## Blocked Path
+
+```text
+KALI01
+   |
+   | Unauthorized Connection
+   v
+FW01
+   |
+   | BLOCK
+   X
+   |
+   +---------> Firewall Event
+                    |
+                    v
+                 Splunk
+                    |
+                    v
+                Analyst
+```
+
+## Permitted Path
+
+```text
+KALI01
+   |
+   | Explicitly Permitted Traffic
+   v
+FW01
+   |
+   | PASS
+   v
+WIN11-02
+
+   +
+
+FW01
+   |
+   +---------> Firewall Event
+                    |
+                    v
+                 Splunk
+```
+
+This demonstrates that network controls are both enforced and observable.
+
+---
+
+# Defense-in-Depth Architecture
+
+The environment now contains multiple security layers:
+
+```text
+                   ATTACK_NET
+                       |
+                       v
+              +----------------+
+              | Network Layer  |
+              |    pfSense     |
+              +----------------+
+                       |
+                       v
+              +----------------+
+              | Endpoint Layer |
+              | Windows FW     |
+              +----------------+
+                       |
+                       v
+              +----------------+
+              | Telemetry      |
+              | Sysmon / Logs  |
+              +----------------+
+                       |
+                       v
+              +----------------+
+              | SIEM Layer     |
+              |    Splunk      |
+              +----------------+
+                       |
+                       v
+                   Analysis
+```
+
+The lab therefore supports both preventative and detective security controls.
+
+---
+
+# Troubleshooting Methodology
+
+The sprint continued the layered troubleshooting methodology established during the network segmentation project.
+
+```text
+Telemetry Missing
+       |
+       v
+Verify Network Connectivity
+       |
+       v
+Verify UDP Listener
+       |
+       v
+Verify Windows Firewall
+       |
+       v
+Verify pfSense Remote Logging
+       |
+       v
+Generate Known Traffic
+       |
+       v
+Search Dedicated Index
+       |
+       v
+Correlate Source/Destination
+       |
+       v
+Validate End-to-End Pipeline
+```
+
+Each component was validated individually before progressing to the next layer.
+
+---
+
+# Security Principles Demonstrated
+
+## Centralized Logging
+
+Firewall events are forwarded from the network security boundary to a centralized SIEM.
+
+## Network Segmentation
+
+ATTACK_NET remains isolated from CORP-LAN except where explicitly permitted.
+
+## Least Privilege
+
+The SIEM host permits UDP/5514 only from the pfSense firewall rather than the entire network.
+
+## Defense in Depth
+
+Security enforcement exists at both the network and endpoint layers.
+
+## Security Visibility
+
+Permitted and blocked network activity can be reviewed centrally in Splunk.
+
+## Validation Through Controlled Testing
+
+Known traffic was intentionally generated to validate that firewall policy and SIEM telemetry accurately reflected each other.
+
+---
+
+# Tools Used
+
+- VMware Workstation Pro
+- pfSense 2.8.1
+- Splunk Enterprise
+- Kali Linux
+- Windows Server 2022
+- Windows 11
+- Windows Defender Firewall
+- PowerShell
+- Syslog
+- Netcat
+- ICMP
+- pfSense filterlog
+
+---
+
+# Skills Demonstrated
+
+- SIEM administration
+- Centralized log management
+- Network-security monitoring
+- pfSense administration
+- Remote syslog configuration
+- Firewall log analysis
+- Splunk data ingestion
+- Splunk index management
+- SPL searching
+- Dashboard creation
+- Network segmentation
+- Firewall policy validation
+- Windows Defender Firewall
+- Least-privilege configuration
+- TCP/IP troubleshooting
+- Network telemetry analysis
+- Security-control validation
+- Detection engineering fundamentals
+
+---
+
+# Evidence
+
+Recommended evidence captured during Sprint 18:
+
+| Screenshot | Evidence |
+|---|---|
+| `01-splunk-syslog-listener.png` | SIEM01 listening on UDP/5514 |
+| `02-pfsense-remote-syslog.png` | FW01 remote logging configuration |
+| `03-pfsense-events-in-splunk.png` | Successful pfSense ingestion |
+| `04-kali-blocked-firewall-event.png` | Blocked ATTACK_NET traffic visible in Splunk |
+| `05-kali-permitted-firewall-event.png` | Permitted ATTACK_NET traffic visible in Splunk |
+| `06-attack-net-search.png` | ATTACK_NET security search |
+| `07-blocked-traffic-search.png` | ATTACK_NET blocked-traffic search |
+| `08-network-security-dashboard.png` | Network Security Monitoring dashboard |
+
+---
+
+# Sprint Outcome
+
+**Status: COMPLETE**
+
+Sprint 18 integrated network-security telemetry into the SOC monitoring environment.
+
+The lab now supports:
+
+- Centralized pfSense firewall logging
+- Dedicated network-security data storage
+- ATTACK_NET activity monitoring
+- Visibility into permitted firewall traffic
+- Visibility into blocked firewall traffic
+- Reusable security searches
+- Network-security visualization
+- Controlled validation of firewall telemetry
+- Centralized investigation through Splunk
+
+The completed monitoring pipeline is:
+
+```text
+Security Test
+     |
+     v
+KALI01
+     |
+     v
+FW01 / pfSense
+     |
+     +---- Enforce Policy
+     |
+     +---- Generate Telemetry
+                  |
+                  v
+              UDP Syslog
+                  |
+                  v
+               SIEM01
+                  |
+                  v
+                Splunk
+                  |
+          +-------+-------+
+          |       |       |
+        Search  Detect  Visualize
+```
+
+This establishes the network-monitoring foundation required for future detection-engineering and incident-response exercises.
