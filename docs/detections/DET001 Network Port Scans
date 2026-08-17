@@ -1,0 +1,32 @@
+Detection ID:
+DET-001
+
+Name:
+Network Port Scan Detection
+
+Data Source:
+pfSense filterlog
+
+Splunk Index:
+network
+
+Attacker:
+KALI01 / 10.10.20.10
+
+Detection Threshold:
+20 or more unique TCP destination ports
+
+Window:
+5 minutes
+
+Positive Test:
+TCP ports 20-100
+
+Negative Test:
+TCP ports 80,443,445,3389
+
+Expected Positive Result:
+Detection triggers
+
+Expected Negative Result:
+Detection does not trigger
