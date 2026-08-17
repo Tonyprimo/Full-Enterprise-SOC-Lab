@@ -1,0 +1,36 @@
+## MITRE ATT&CK Mapping
+
+### T1046 — Network Service Discovery
+
+| Field | Value |
+|---|---|
+| Tactic | Discovery |
+| Technique | Network Service Discovery |
+| Technique ID | T1046 |
+| Data Source | pfSense Firewall Logs |
+| Detection | DET-001 — Network Port Scan Detection |
+| Severity | Medium |
+
+DET-001 maps to **MITRE ATT&CK T1046 — Network Service Discovery**.
+
+Network Service Discovery occurs when an adversary attempts to identify services running on remote systems or network infrastructure. Port scanning is a common method used to perform this discovery.
+
+During the Sprint 19 simulation, KALI01 generated TCP connection attempts across multiple destination ports:
+
+- **Source:** KALI01 (`10.10.20.10`)
+- **Destination:** FW01 (`10.10.10.1`)
+- **Ports Scanned:** TCP 20–100
+- **Firewall Action:** Block
+- **Detection Threshold:** 20 or more unique destination ports
+- **Detection Window:** 5 minutes
+
+The activity generated pfSense `filterlog` events that were forwarded to Splunk and analyzed by DET-001.
+
+### Detection Logic
+
+DET-001 identifies a potential port scan when a source attempts connections to at least:
+
+```text
+20 unique TCP destination ports
+within
+5 minutes
