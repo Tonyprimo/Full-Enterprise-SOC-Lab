@@ -1,0 +1,112 @@
+## Sprint 19 — Network Reconnaissance Detection Engineering
+
+**Status:** Complete
+
+### Objective
+Build and validate the lab's first custom behavioral network detection using pfSense firewall telemetry and Splunk. The sprint focused on detecting network reconnaissance, validating detection accuracy through positive and negative testing, operationalizing the detection as a scheduled alert, mapping the activity to MITRE ATT&CK, and documenting an analyst response workflow.
+
+### Work Completed
+- Validated KALI01 connectivity on the isolated `ATTACK_NET` network (`10.10.20.0/24`).
+- Confirmed KALI01 (`10.10.20.10`) could resolve the FW01 ATTACK_NET gateway (`10.10.20.1`) through ARP despite ICMP being restricted by firewall policy.
+- Verified the Sprint 18 pfSense → Splunk logging pipeline remained operational.
+- Generated controlled network reconnaissance from KALI01 using an Nmap TCP connect scan:
+  ```bash
+  nmap -sT -Pn -p 20-100 10.10.10.1
+  ```
+- Generated connection attempts against **81 unique TCP destination ports**.
+- Confirmed FW01/pfSense blocked the reconnaissance traffic according to the existing ATTACK_NET firewall policy.
+- Verified corresponding pfSense `filterlog` events were generated for the blocked traffic.
+- Confirmed the firewall events were successfully forwarded to SIEM01 over **UDP/5514** and stored in Splunk's `network` index.
+- Analyzed raw pfSense `filterlog` events and confirmed visibility into:
+  - Firewall interface
+  - Firewall action
+  - Traffic direction
+  - Protocol
+  - Source IP
+  - Destination IP
+  - Source port
+  - Destination port
+- Identified that Splunk did not automatically expose the destination port as a usable field.
+- Created a search-time `rex` extraction for the destination port:
+  ```spl
+  | rex "10\.10\.20\.10,10\.10\.10\.1,\d+,(?<dest_port>\d+)"
+  ```
+- Validated successful extraction of `dest_port` from the raw pfSense events.
+- Developed **DET-001 — Network Port Scan Detection** using the following detection logic:
+  ```spl
+  index=network process=filterlog "10.10.20.10" "10.10.10.1" "tcp"
+  | rex "10\.10\.20\.10,10\.10\.10\.1,\d+,(?<dest_port>\d+)"
+  | stats dc(dest_port) as unique_ports count as attempts
+  | where unique_ports>=20
+  ```
+- Established a lab detection threshold of:
+  ```text
+  >=20 unique TCP destination ports within 5 minutes
+  ```
+- Performed a **positive validation test** using the TCP 20–100 scan.
+- Confirmed the 81-port scan exceeded the detection threshold and successfully triggered DET-001.
+- Performed a **negative validation test** using:
+  ```bash
+  nmap -sT -Pn -p 80,443,445,3389 10.10.10.1
+  ```
+- Confirmed the four-port test remained below the detection threshold and did **not** trigger DET-001.
+- Converted DET-001 from an ad-hoc Splunk search into a **scheduled Splunk alert**.
+- Configured the detection to evaluate recent firewall telemetry on a recurring schedule.
+- Generated a fresh positive reconnaissance test and successfully triggered the scheduled DET-001 alert.
+- Mapped DET-001 to **MITRE ATT&CK T1046 — Network Service Discovery** under the **Discovery** tactic.
+- Documented an analyst triage workflow covering:
+  - Source identification
+  - Destination identification
+  - Scan-scope analysis
+  - Firewall disposition review
+  - Related activity searches
+  - Endpoint telemetry correlation
+  - Authorization determination
+  - Escalation criteria
+- Documented the Sprint 19 alert disposition as an **authorized security simulation / benign expected test activity**.
+- Documented potential false positives including authorized vulnerability scanners, penetration-testing systems, asset-discovery tools, network-management systems, and administrator troubleshooting.
+- Documented production tuning considerations including scanner allowlisting, threshold adjustment, detection-window tuning, destination sensitivity, and additional telemetry correlation.
+
+### Detection Validation
+
+| Test | Activity | Unique Ports | Expected Result | Actual Result |
+|---|---|---:|---|---|
+| Positive Test | TCP ports 20–100 | 81 | Trigger | PASS |
+| Negative Test | TCP ports 80, 443, 445, 3389 | 4 | No Trigger | PASS |
+| Scheduled Alert Test | Fresh TCP 20–100 scan | ≥20 | Alert Trigger | PASS |
+
+### MITRE ATT&CK Mapping
+- **Tactic:** Discovery
+- **Technique:** Network Service Discovery
+- **Technique ID:** T1046
+- **Detection:** DET-001 — Network Port Scan Detection
+
+### Troubleshooting / Lessons Learned
+- Determined that a failed ICMP ping did not indicate failed ATTACK_NET connectivity; ARP resolution confirmed Layer 2 communication between KALI01 and FW01.
+- Confirmed that Splunk's `source=udp:5514` represented the **syslog transport protocol**, not the protocol of the underlying firewall traffic.
+- Identified an incorrect Splunk search time range as the cause of temporarily receiving zero detection results, preventing unnecessary modification of working SPL.
+- Used raw-event analysis to develop the required field extraction instead of relying on assumptions about pfSense field formatting.
+- Demonstrated the importance of testing both **true-positive and below-threshold activity** before operationalizing a detection.
+
+### Result
+ Successfully developed, tested, tuned, and operationalized **DET-001 — Network Port Scan Detection**. The detection identified an 81-port reconnaissance scan, ignored a four-port below-threshold test, successfully triggered as a scheduled Splunk alert, and was mapped to **MITRE ATT&CK T1046 — Network Service Discovery**. Sprint 19 established a repeatable detection-engineering workflow for future SOC lab detections:
+
+```text
+Attack Simulation
+      ↓
+Firewall Telemetry
+      ↓
+Splunk Ingestion
+      ↓
+Field Extraction
+      ↓
+Detection Logic
+      ↓
+Positive / Negative Testing
+      ↓
+Scheduled Alert
+      ↓
+MITRE ATT&CK Mapping
+      ↓
+Analyst Triage
+```
