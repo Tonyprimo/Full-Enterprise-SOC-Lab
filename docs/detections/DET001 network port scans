@@ -1,36 +1,762 @@
-## MITRE ATT&CK Mapping
+# MITRE ATT&CK Mapping
 
-### T1046 — Network Service Discovery
+## T1046 — Network Service Discovery
+
+DET-001 maps to **MITRE ATT&CK T1046 — Network Service Discovery** within the **Discovery** tactic.
+
+Network Service Discovery describes activity used to identify services running on remote systems or network infrastructure. Port scanning is one method an adversary may use to identify available services and potential opportunities for further access.
+
+### ATT&CK Mapping
 
 | Field | Value |
 |---|---|
 | Tactic | Discovery |
 | Technique | Network Service Discovery |
 | Technique ID | T1046 |
-| Data Source | pfSense Firewall Logs |
 | Detection | DET-001 — Network Port Scan Detection |
+| Data Source | pfSense `filterlog` |
+| SIEM | Splunk Enterprise |
+| Detection Type | Behavioral / Threshold-Based |
 | Severity | Medium |
+| Status | Validated |
 
-DET-001 maps to **MITRE ATT&CK T1046 — Network Service Discovery**.
+### Official MITRE ATT&CK Reference
 
-Network Service Discovery occurs when an adversary attempts to identify services running on remote systems or network infrastructure. Port scanning is a common method used to perform this discovery.
+[T1046 — Network Service Discovery](https://attack.mitre.org/techniques/T1046/)
 
-During the Sprint 19 simulation, KALI01 generated TCP connection attempts across multiple destination ports:
+---
 
-- **Source:** KALI01 (`10.10.20.10`)
-- **Destination:** FW01 (`10.10.10.1`)
-- **Ports Scanned:** TCP 20–100
-- **Firewall Action:** Block
-- **Detection Threshold:** 20 or more unique destination ports
-- **Detection Window:** 5 minutes
+## ATT&CK Detection Relationship
 
-The activity generated pfSense `filterlog` events that were forwarded to Splunk and analyzed by DET-001.
-
-### Detection Logic
-
-DET-001 identifies a potential port scan when a source attempts connections to at least:
+The activity generated during Sprint 19 represents network service discovery behavior because KALI01 attempted TCP connections across a range of destination ports.
 
 ```text
-20 unique TCP destination ports
-within
-5 minutes
+KALI01
+10.10.20.10
+        |
+        | TCP Connection Attempts
+        | Ports 20-100
+        v
++-------------------+
+|       FW01        |
+|     pfSense       |
+|   10.10.10.1      |
++-------------------+
+        |
+        | 81 Unique
+        | Destination Ports
+        v
+Network Service Discovery
+        |
+        v
+MITRE ATT&CK
+T1046
+```
+
+The activity was authorized and intentionally generated for detection validation.
+
+DET-001 detects the underlying network behavior regardless of whether the activity is ultimately determined to be malicious or authorized.
+
+---
+
+## ATT&CK Detection Workflow
+
+The detection workflow connects observable network behavior to the corresponding MITRE ATT&CK technique.
+
+```text
+┌─────────────────────────────┐
+│      ATTACK SIMULATION      │
+│                             │
+│ KALI01 — 10.10.20.10        │
+│ Nmap TCP Connect Scan       │
+│ Ports 20-100                │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│       NETWORK CONTROL       │
+│                             │
+│ FW01 / pfSense              │
+│ ATTACK_NET → CORP-LAN       │
+│                             │
+│ Action: BLOCK               │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│          TELEMETRY          │
+│                             │
+│ pfSense filterlog           │
+│                             │
+│ Source IP                   │
+│ Destination IP              │
+│ Protocol                    │
+│ Destination Port            │
+│ Firewall Action             │
+└──────────────┬──────────────┘
+               |
+               | Syslog UDP/5514
+               v
+┌─────────────────────────────┐
+│            SIEM             │
+│                             │
+│ Splunk Enterprise           │
+│ index=network               │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│      FIELD EXTRACTION       │
+│                             │
+│ Extract destination port    │
+│ from pfSense filterlog      │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│       DETECTION LOGIC       │
+│                             │
+│ DET-001                     │
+│                             │
+│ >=20 Unique TCP Ports       │
+│ Within 5 Minutes            │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│        ATT&CK MAPPING       │
+│                             │
+│ Discovery                   │
+│ T1046                       │
+│ Network Service Discovery   │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│        SOC RESPONSE         │
+│                             │
+│ Analyst Triage              │
+│ Authorization Check         │
+│ Investigation               │
+│ Disposition                 │
+└─────────────────────────────┘
+```
+
+---
+
+## Observable Behavior
+
+The detection is based on observable network behavior rather than a specific security-testing tool or command.
+
+During the controlled simulation:
+
+```text
+Source:
+10.10.20.10 / KALI01
+
+Destination:
+10.10.10.1 / FW01
+
+Protocol:
+TCP
+
+Destination Ports:
+20-100
+
+Unique Destination Ports:
+81
+
+Firewall Action:
+BLOCK
+```
+
+Although Nmap was used to generate the activity, DET-001 does **not** specifically detect Nmap.
+
+Instead, DET-001 detects the underlying behavior:
+
+```text
+Single Source
+      |
+      v
+Single Destination
+      |
+      v
+Large Number of Unique TCP Ports
+      |
+      v
+Short Time Window
+      |
+      v
+Potential Network Service Discovery
+```
+
+This allows the detection logic to identify similar reconnaissance behavior regardless of which scanning utility generates the traffic.
+
+---
+
+## Detection Logic
+
+DET-001 uses pfSense firewall telemetry to identify a high number of unique TCP destination ports associated with the controlled ATTACK_NET source.
+
+```spl
+index=network process=filterlog "10.10.20.10" "10.10.10.1" "tcp"
+| rex "10\.10\.20\.10,10\.10\.10\.1,\d+,(?<dest_port>\d+)"
+| stats dc(dest_port) as unique_ports count as attempts
+| where unique_ports>=20
+```
+
+### Detection Threshold
+
+```text
+Unique Destination Ports: >=20
+Detection Window:          5 minutes
+Protocol:                  TCP
+```
+
+The threshold was selected for the controlled lab environment and should not be interpreted as a universal production threshold.
+
+A production implementation would require baselining and tuning according to normal network behavior, authorized scanners, asset roles, and expected administrative activity.
+
+---
+
+## Positive ATT&CK Validation
+
+A controlled TCP scan was generated from KALI01:
+
+```bash
+nmap -sT -Pn -p 20-100 10.10.10.1
+```
+
+The test generated activity across:
+
+```text
+81 unique TCP destination ports
+```
+
+DET-001 threshold:
+
+```text
+>=20 unique destination ports
+```
+
+Result:
+
+```text
+81 >= 20
+
+DET-001 TRIGGERED
+```
+
+The scheduled Splunk alert also successfully triggered from the controlled test activity.
+
+This confirmed that DET-001 successfully identified behavior consistent with **T1046 — Network Service Discovery**.
+
+---
+
+## Negative Validation
+
+A smaller TCP scan was generated to validate that limited multi-port activity would remain below the detection threshold.
+
+```bash
+nmap -sT -Pn -p 80,443,445,3389 10.10.10.1
+```
+
+This generated activity across:
+
+```text
+4 unique TCP destination ports
+```
+
+DET-001 threshold:
+
+```text
+>=20 unique destination ports
+```
+
+Result:
+
+```text
+4 < 20
+
+DET-001 NOT TRIGGERED
+```
+
+This demonstrated that limited multi-port activity did not automatically generate DET-001.
+
+---
+
+## ATT&CK Validation Summary
+
+| Test | Behavior | Unique Ports | DET-001 | Result |
+|---|---|---:|---|---|
+| Positive Test | TCP 20-100 Scan | 81 | Triggered | PASS |
+| Negative Test | TCP 80,443,445,3389 | 4 | Not Triggered | PASS |
+| Scheduled Alert Test | TCP 20-100 Scan | >=20 | Alert Triggered | PASS |
+
+---
+
+# Detection-to-Response Workflow
+
+MITRE ATT&CK provides context for the observed behavior, while DET-001 provides the mechanism for identifying that behavior within the environment.
+
+```text
+Network Activity
+      |
+      v
+pfSense Telemetry
+      |
+      v
+Splunk Ingestion
+      |
+      v
+DET-001 Analytics
+      |
+      v
+Threshold Exceeded
+      |
+      v
+Potential T1046 Activity
+      |
+      v
+Alert Generated
+      |
+      v
+Analyst Investigation
+      |
+      +-----------------------+
+      |                       |
+      v                       v
+Authorized                Unauthorized
+Activity                   Activity
+      |                       |
+      v                       v
+Document                  Investigate
+      |                       |
+      v                       v
+Close                     Escalate
+```
+
+---
+
+# Analyst Response
+
+When **DET-001 — Network Port Scan Detection** triggers, the analyst should determine whether the activity represents authorized network scanning, legitimate administrative activity, or potentially malicious reconnaissance.
+
+## Analyst Triage Workflow
+
+```text
+DET-001 Triggered
+        |
+        v
+Identify Source
+        |
+        v
+Identify Destination
+        |
+        v
+Review Scan Scope
+        |
+        v
+Review Firewall Action
+        |
+        v
+Determine Source Asset
+        |
+        v
+Search Additional Activity
+        |
+        v
+Review Endpoint Telemetry
+        |
+        v
+Determine Authorization
+        |
+        +----------------------+
+        |                      |
+        v                      v
+    Authorized             Suspicious
+        |                      |
+        v                      v
+ Document / Close       Escalate / Investigate
+```
+
+---
+
+## 1. Identify the Source
+
+Determine which system generated the scanning activity.
+
+Review:
+
+- Source IP address
+- Source hostname
+- Network segment
+- Asset role
+- Asset owner
+- Whether the source is an authorized security scanner
+
+For the Sprint 19 simulation:
+
+```text
+Source IP:    10.10.20.10
+Source Host:  KALI01
+Network:      ATTACK_NET
+```
+
+---
+
+## 2. Identify the Destination
+
+Determine which system was targeted by the activity.
+
+For the Sprint 19 simulation:
+
+```text
+Destination IP: 10.10.10.1
+Destination:    FW01
+Network:        CORP-LAN
+```
+
+Determine whether the destination represents a:
+
+- Workstation
+- Server
+- Domain controller
+- Security appliance
+- Network infrastructure device
+- Critical system
+
+The role and sensitivity of the destination should influence investigation priority.
+
+---
+
+## 3. Review Scan Behavior
+
+Determine the scope and characteristics of the activity.
+
+Review:
+
+- Number of unique destination ports
+- Total connection attempts
+- Protocol
+- Duration
+- Destination systems
+- Firewall disposition
+- Whether activity continued after the initial detection
+
+Sprint 19 test activity:
+
+```text
+Protocol:             TCP
+Ports Scanned:        20-100
+Unique Ports:         81
+Detection Threshold:  >=20
+Firewall Action:      BLOCK
+```
+
+---
+
+## 4. Review Firewall Disposition
+
+Determine whether the connection attempts were:
+
+```text
+PASS
+```
+
+or:
+
+```text
+BLOCK
+```
+
+Blocked traffic indicates that the firewall policy prevented the attempted connections.
+
+Permitted traffic may require additional investigation to determine:
+
+- Which services were reachable
+- Whether connections were established
+- Whether authentication was attempted
+- Whether subsequent activity occurred
+- Whether the access was authorized
+
+For Sprint 19:
+
+```text
+Firewall Disposition:
+BLOCK
+```
+
+---
+
+## 5. Search for Additional Activity
+
+Search Splunk for other activity involving the source IP:
+
+```spl
+index=network "10.10.20.10"
+```
+
+Review activity before and after DET-001 triggered.
+
+Look for:
+
+- Additional port scans
+- Multiple destination systems
+- Repeated connection attempts
+- Connections to sensitive services
+- Firewall PASS events
+- Changes in scanning behavior
+- Continued activity after the initial detection
+
+---
+
+## 6. Review Endpoint Telemetry
+
+If the destination is a monitored endpoint, correlate the firewall detection with available endpoint telemetry.
+
+Potential telemetry includes:
+
+- Sysmon
+- Windows Event Logs
+- Process creation events
+- Network connection events
+- Authentication events
+- PowerShell logging
+- Splunk Universal Forwarder telemetry
+
+The analyst should determine whether reconnaissance was followed by additional suspicious behavior.
+
+Example investigation path:
+
+```text
+Port Scan
+    |
+    v
+Service Identified
+    |
+    v
+Connection Attempt
+    |
+    v
+Authentication Attempt
+    |
+    v
+Process Execution
+```
+
+Evidence of progression beyond reconnaissance may increase the severity of the investigation.
+
+---
+
+## 7. Determine Authorization
+
+Determine whether the source is authorized to perform network scanning.
+
+Potential legitimate sources include:
+
+- Vulnerability scanners
+- Authorized penetration-testing systems
+- Security assessment tools
+- Network-management systems
+- Asset-discovery systems
+- Administrator troubleshooting
+
+If authorized:
+
+```text
+Document Activity
+       |
+       v
+Record Justification
+       |
+       v
+Close Alert
+```
+
+If unauthorized:
+
+```text
+Continue Investigation
+       |
+       v
+Determine Scope
+       |
+       v
+Escalate if Necessary
+```
+
+---
+
+## 8. Escalation
+
+If the activity cannot be explained as legitimate, consider:
+
+- Escalating the detection to an incident
+- Increasing monitoring of the source
+- Investigating the source endpoint
+- Reviewing additional SIEM telemetry
+- Identifying other systems contacted by the source
+- Reviewing successful firewall connections
+- Restricting network access when appropriate
+- Preserving relevant logs and evidence
+- Searching for related authentication or execution activity
+
+---
+
+# Alert Disposition
+
+| Field | Value |
+|---|---|
+| Detection | DET-001 — Network Port Scan Detection |
+| Source | KALI01 (`10.10.20.10`) |
+| Source Network | ATTACK_NET |
+| Destination | FW01 (`10.10.10.1`) |
+| Activity | TCP Port Scan |
+| Ports | TCP 20–100 |
+| Unique Ports | 81 |
+| Firewall Action | Block |
+| MITRE ATT&CK | T1046 — Network Service Discovery |
+| Authorization | Authorized Lab Simulation |
+| Final Disposition | Benign / Expected Test Activity |
+| Escalation Required | No |
+
+---
+
+# Analyst Assessment
+
+DET-001 successfully identified controlled network reconnaissance generated from KALI01.
+
+The analyst reviewed:
+
+- Source system
+- Destination system
+- Number of unique destination ports
+- Firewall telemetry
+- Network segment
+- Firewall disposition
+- Lab authorization
+
+KALI01 attempted TCP connections across 81 destination ports.
+
+pfSense blocked the connection attempts and generated `filterlog` telemetry describing the activity.
+
+The telemetry was forwarded to Splunk, where DET-001 identified that the number of unique destination ports exceeded the configured detection threshold.
+
+The scheduled Splunk alert successfully triggered.
+
+Review of the source and lab context established that the activity was part of an authorized security simulation.
+
+**Final Disposition:**
+
+```text
+Authorized Security Testing
+No Escalation Required
+```
+
+---
+
+# False Positive Considerations
+
+DET-001 identifies behavior that may indicate network reconnaissance, but the behavior is not inherently malicious.
+
+Potential legitimate sources include:
+
+- Vulnerability scanners
+- Penetration-testing systems
+- Asset-discovery tools
+- Network-management platforms
+- Security monitoring systems
+- Administrator troubleshooting
+- Authorized infrastructure assessments
+
+A production implementation would require tuning based on normal environmental behavior.
+
+Potential tuning methods include:
+
+```text
+Allowlist Authorized Scanners
+            |
+            v
+Baseline Normal Activity
+            |
+            v
+Tune Unique-Port Threshold
+            |
+            v
+Tune Detection Window
+            |
+            v
+Consider Destination Sensitivity
+            |
+            v
+Correlate Firewall Disposition
+            |
+            v
+Correlate Endpoint Telemetry
+```
+
+The current threshold of **20 unique destination ports within five minutes** was selected specifically for the controlled lab environment.
+
+---
+
+# Detection Engineering Lifecycle
+
+DET-001 demonstrates the complete detection-engineering lifecycle used in the SOC home lab:
+
+```text
+Identify ATT&CK Behavior
+          |
+          v
+Identify Required Telemetry
+          |
+          v
+Generate Controlled Activity
+          |
+          v
+Verify Raw Events
+          |
+          v
+Extract Required Fields
+          |
+          v
+Develop Detection Logic
+          |
+          v
+Establish Threshold
+          |
+          v
+Positive Validation
+          |
+          v
+Negative Validation
+          |
+          v
+Operationalize as Alert
+          |
+          v
+Trigger Alert
+          |
+          v
+Perform Analyst Triage
+          |
+          v
+Determine Disposition
+          |
+          v
+Document Detection
+```
+
+This workflow provides a repeatable methodology for developing future detections within the SOC home lab.
+
+---
+
+# MITRE ATT&CK Coverage
+
+Sprint 19 introduced the first formally validated MITRE ATT&CK-mapped detection in the project.
+
+| Detection ID | ATT&CK Tactic | Technique | Technique ID | Status |
+|---|---|---|---|---|
+| DET-001 | Discovery | Network Service Discovery | T1046 | Validated |
+
+Future detections will expand this table to provide visibility into the MITRE ATT&CK techniques covered by the lab.
