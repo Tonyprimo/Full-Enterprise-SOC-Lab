@@ -1,0 +1,820 @@
+# Sprint 21 — PowerShell Detection Engineering
+
+**Status:** Complete 
+**Detection:** DET-003 — Encoded PowerShell Execution 
+**MITRE ATT&CK:** T1059.001 — Command and Scripting Interpreter: PowerShell 
+**Primary Data Sources:** Sysmon Process Creation / PowerShell Script Block Logging 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Develop, validate, and operationalize an endpoint-focused detection for suspicious PowerShell execution.
+
+Sprint 21 expanded the SOC lab into endpoint execution monitoring by using existing Windows, Sysmon, and PowerShell telemetry to detect PowerShell launched with encoded-command arguments.
+
+The sprint focused on:
+
+- Validating endpoint and SIEM connectivity
+- Verifying PowerShell and Sysmon telemetry
+- Establishing a normal PowerShell baseline
+- Generating controlled encoded PowerShell activity
+- Developing DET-003
+- Performing positive and negative detection validation
+- Developing a broader PowerShell hunting query
+- Operationalizing DET-003 as a scheduled Splunk alert
+- Mapping the detection to MITRE ATT&CK T1059.001
+- Correlating process, PowerShell, and network telemetry
+- Developing an analyst investigation workflow
+- Documenting false-positive and tuning considerations
+
+---
+
+## Environment
+
+| System | Role | IP Address |
+|---|---|---|
+| DC01 | Active Directory Domain Controller / DNS | `10.10.10.10` |
+| SIEM01 | Splunk Enterprise | `10.10.10.20` |
+| WIN11-02 | Domain Workstation / Detection Test Endpoint | CORP-LAN |
+
+Domain:
+
+```text
+corp.lab
+```
+
+Detection pipeline:
+
+```text
+Controlled PowerShell Activity
+             |
+             v
+         WIN11-02
+             |
+      +------+------+
+      |             |
+      v             v
+   Sysmon       PowerShell
+  Event ID 1    Event ID 4104
+      |             |
+      +------+------+
+             |
+             v
+ Splunk Universal Forwarder
+             |
+             v
+          SIEM01
+             |
+             v
+     Splunk Enterprise
+             |
+             v
+          DET-003
+             |
+             v
+      Scheduled Alert
+             |
+             v
+       Analyst Triage
+```
+
+---
+
+## Work Completed
+
+### Environment Validation
+
+Validated the secure channel between WIN11-02 and the `corp.lab` Active Directory domain.
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+Expected result:
+
+```text
+True
+```
+
+Validated domain name resolution:
+
+```powershell
+Resolve-DnsName dc01.corp.lab
+```
+
+Expected result:
+
+```text
+10.10.10.10
+```
+
+Validated connectivity between WIN11-02 and the Splunk receiver:
+
+```powershell
+Test-NetConnection 10.10.10.20 -Port 9997
+```
+
+Expected result:
+
+```text
+TcpTestSucceeded : True
+```
+
+Verified the Splunk Universal Forwarder connection:
+
+```powershell
+cd "C:\Program Files\SplunkUniversalForwarder\bin"
+.\splunk.exe list forward-server
+```
+
+Expected active forward:
+
+```text
+10.10.10.20:9997
+```
+
+---
+
+## PowerShell Telemetry Validation
+
+Existing Windows endpoint telemetry was reviewed in Splunk.
+
+PowerShell telemetry search:
+
+```spl
+index=* host="WIN11-02" powershell
+```
+
+PowerShell Script Block Logging was checked using:
+
+```spl
+index=* host="WIN11-02" EventCode=4104
+```
+
+Sysmon process-creation telemetry was checked using:
+
+```spl
+index=* host="WIN11-02" EventCode=1
+```
+
+Relevant process telemetry included PowerShell process executions such as:
+
+```text
+powershell.exe
+```
+
+The available endpoint telemetry provided visibility into PowerShell execution behavior required for DET-003.
+
+---
+
+## Normal PowerShell Baseline
+
+Normal PowerShell activity was generated to establish a baseline.
+
+Commands included:
+
+```powershell
+Get-Date
+```
+
+```powershell
+Get-Service | Select-Object -First 5
+```
+
+```powershell
+Get-Process | Select-Object -First 5
+```
+
+These commands represented ordinary administrative PowerShell activity.
+
+The resulting telemetry was reviewed in Splunk to establish the difference between routine PowerShell execution and the behavior targeted by DET-003.
+
+---
+
+## Controlled Encoded PowerShell Test
+
+A harmless PowerShell command was converted to Base64 and executed using PowerShell's encoded-command functionality.
+
+Payload:
+
+```powershell
+$cmd='Write-Output "Sprint21 DET003 Test"'
+```
+
+Encoding:
+
+```powershell
+$bytes=[Text.Encoding]::Unicode.GetBytes($cmd)
+$encoded=[Convert]::ToBase64String($bytes)
+```
+
+Execution:
+
+```powershell
+powershell.exe -EncodedCommand $encoded
+```
+
+Expected output:
+
+```text
+Sprint21 DET003 Test
+```
+
+The command performed no malicious action.
+
+Its purpose was to generate endpoint telemetry containing:
+
+```text
+powershell.exe
+-EncodedCommand
+```
+
+for detection-engineering validation.
+
+---
+
+## Telemetry Analysis
+
+The encoded PowerShell activity was located in Splunk.
+
+Initial search:
+
+```spl
+index=* host="WIN11-02" "EncodedCommand"
+```
+
+The controlled payload could also be located using:
+
+```spl
+index=* host="WIN11-02" "Sprint21 DET003 Test"
+```
+
+Sysmon process telemetry was reviewed using:
+
+```spl
+index=* host="WIN11-02" EventCode=1 "powershell.exe"
+```
+
+Relevant process information included fields such as:
+
+```text
+CommandLine
+Image
+ParentImage
+User
+Computer
+```
+
+PowerShell Script Block Logging, when available, provided additional visibility through:
+
+```text
+ScriptBlockText
+```
+
+This demonstrated that the same execution behavior could be investigated using multiple endpoint telemetry sources.
+
+---
+
+# DET-003 Development
+
+Created:
+
+```text
+DET-003 — Encoded PowerShell Execution
+```
+
+Detection objective:
+
+> Identify PowerShell process executions containing encoded-command arguments that may warrant security investigation.
+
+Primary behavior:
+
+```text
+PowerShell
+    +
+Encoded Command Argument
+```
+
+Basic search:
+
+```spl
+index=* ("-EncodedCommand" OR " -enc ")
+```
+
+Preferred Sysmon-based detection:
+
+```spl
+index=* EventCode=1
+(CommandLine="*-EncodedCommand*" OR CommandLine="* -enc *")
+```
+
+Portfolio output:
+
+```spl
+index=* EventCode=1
+(CommandLine="*-EncodedCommand*" OR CommandLine="* -enc *")
+| eval detection="DET-003 - Encoded PowerShell Execution"
+| table _time detection host User Image CommandLine
+```
+
+The exact process fields used by the detection were validated against the endpoint telemetry available in Splunk.
+
+---
+
+## Detection Logic
+
+```text
+Endpoint Process Creation
+          |
+          v
+Is Process PowerShell?
+          |
+          v
+Review Command Line
+          |
+          v
+Encoded Argument Present?
+       /          \
+      NO          YES
+      |            |
+      v            v
+No DET-003      DET-003
+```
+
+The detection identifies a suspicious execution characteristic rather than attempting to identify a specific offensive tool.
+
+---
+
+## Positive Validation
+
+A fresh harmless encoded PowerShell command was generated.
+
+```powershell
+$cmd='Write-Output "DET003 Positive Validation"'
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+powershell.exe -EncodedCommand $encoded
+```
+
+DET-003 was executed against the resulting endpoint telemetry.
+
+Expected:
+
+```text
+-EncodedCommand
+```
+
+Result:
+
+```text
+DET-003 TRIGGERED
+```
+
+**Positive Validation:** PASS
+
+The test demonstrated that DET-003 successfully identified PowerShell execution containing an encoded-command argument.
+
+---
+
+## Negative Validation
+
+Normal PowerShell commands were executed without encoded arguments.
+
+Examples:
+
+```powershell
+Get-Date
+```
+
+```powershell
+Get-ComputerInfo | Select-Object WindowsProductName
+```
+
+DET-003 was executed against a clean time range containing the normal PowerShell activity.
+
+Expected:
+
+```text
+No DET-003 result
+```
+
+Result:
+
+```text
+DET-003 NOT TRIGGERED
+```
+
+**Negative Validation:** PASS
+
+This demonstrated that normal PowerShell execution did not automatically trigger DET-003.
+
+---
+
+## Validation Summary
+
+| Test | Activity | Expected | Result |
+|---|---|---|---|
+| Baseline | Normal PowerShell | No DET-003 | PASS |
+| Positive | PowerShell `-EncodedCommand` | Trigger | PASS |
+| Negative | Normal PowerShell commands | No Trigger | PASS |
+| Endpoint Telemetry | PowerShell/Sysmon events | Searchable | PASS |
+
+---
+
+## PowerShell Hunting Query
+
+In addition to DET-003, a broader PowerShell hunting search was developed.
+
+```spl
+index=* "powershell"
+("-EncodedCommand" OR "-NoProfile" OR "-NonInteractive" OR "Hidden")
+```
+
+This search is intentionally broader than DET-003.
+
+It can identify PowerShell executions containing arguments such as:
+
+```text
+-EncodedCommand
+-NoProfile
+-NonInteractive
+-WindowStyle Hidden
+```
+
+Because these arguments can also occur during legitimate administration, this query was classified as a hunting query rather than a high-confidence alert.
+
+Saved as:
+
+```text
+HUNT - Suspicious PowerShell Arguments
+```
+
+---
+
+## Scheduled Alert
+
+DET-003 was operationalized as a scheduled Splunk alert.
+
+Configuration:
+
+```text
+Alert Name:
+DET-003 - Encoded PowerShell Execution
+
+Type:
+Scheduled
+
+Schedule:
+Every 5 minutes
+
+Search Window:
+Last 10 minutes
+
+Trigger:
+Number of Results > 0
+
+Severity:
+Medium
+```
+
+A fresh controlled encoded PowerShell execution was generated:
+
+```powershell
+$cmd='Write-Output "DET003 Alert Validation"'
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+powershell.exe -EncodedCommand $encoded
+```
+
+The resulting endpoint telemetry satisfied DET-003 and generated the scheduled alert.
+
+**Scheduled Alert Validation:** PASS
+
+---
+
+# MITRE ATT&CK Mapping
+
+DET-003 was mapped to:
+
+```text
+Tactic:
+Execution
+
+Technique:
+Command and Scripting Interpreter: PowerShell
+
+Technique ID:
+T1059.001
+```
+
+Detection relationship:
+
+```text
+PowerShell Execution
+       |
+       v
+Encoded Command Argument
+       |
+       v
+Endpoint Telemetry
+       |
+       v
+DET-003
+       |
+       v
+MITRE ATT&CK
+T1059.001
+```
+
+Encoded PowerShell is not inherently malicious.
+
+The detection identifies execution behavior that requires analyst context.
+
+---
+
+# Analyst Investigation
+
+When DET-003 triggers, the analyst should:
+
+1. Identify the endpoint.
+2. Identify the executing user.
+3. Review the complete PowerShell command line.
+4. Identify the parent process.
+5. Review PowerShell Script Block telemetry when available.
+6. Determine the purpose of the encoded command.
+7. Review related process creation.
+8. Review network activity.
+9. Review child processes.
+10. Determine whether execution was authorized.
+11. Correlate with other detections.
+12. Escalate unexplained or suspicious activity.
+
+Workflow:
+
+```text
+DET-003 Triggered
+        |
+        v
+Identify Endpoint
+        |
+        v
+Identify User
+        |
+        v
+Review Command Line
+        |
+        v
+Review Parent Process
+        |
+        v
+Review Script Block
+        |
+        v
+Review Network Activity
+        |
+        v
+Review Child Processes
+        |
+        v
+Determine Context
+        |
+        +----------------------+
+        |                      |
+        v                      v
+    Authorized             Suspicious
+        |                      |
+        v                      v
+ Document / Close       Investigate / Escalate
+```
+
+---
+
+## Parent Process Investigation
+
+Sysmon process telemetry can provide parent-process context.
+
+Search:
+
+```spl
+index=* EventCode=1 "powershell"
+| table _time host User ParentImage Image CommandLine
+```
+
+The parent process can help determine how PowerShell was launched.
+
+Context should be evaluated rather than treating any individual parent process as inherently malicious.
+
+---
+
+## Script Block Correlation
+
+PowerShell Script Block Logging can provide additional visibility into executed PowerShell content.
+
+Search:
+
+```spl
+index=* EventCode=4104 host="WIN11-02"
+```
+
+For the controlled Sprint 21 tests, the analyst could search for:
+
+```text
+DET003
+```
+
+Correlation between:
+
+```text
+Sysmon Process Creation
+          +
+PowerShell Script Block Logging
+```
+
+provides stronger investigative context than either telemetry source alone.
+
+---
+
+## Network Correlation
+
+Sysmon network telemetry can be reviewed around the time of the detection.
+
+```spl
+index=* host="WIN11-02" EventCode=3
+```
+
+The controlled Sprint 21 payload only generated local output and therefore was not expected to produce suspicious outbound network activity.
+
+The absence or presence of related network connections can help the analyst determine the significance of a PowerShell detection.
+
+---
+
+## Process Correlation
+
+Additional process-creation telemetry can be reviewed using:
+
+```spl
+index=* host="WIN11-02" EventCode=1
+```
+
+The analyst should determine whether PowerShell launched unusual child processes or whether additional suspicious execution occurred around the detection.
+
+---
+
+## Alert Disposition
+
+The Sprint 21 validation alert was generated by an authorized security simulation.
+
+| Field | Value |
+|---|---|
+| Detection | DET-003 — Encoded PowerShell Execution |
+| Source | WIN11-02 |
+| Behavior | PowerShell `-EncodedCommand` |
+| Payload | Benign `Write-Output` test |
+| ATT&CK | T1059.001 — PowerShell |
+| Authorization | Authorized Lab Simulation |
+| Disposition | Benign / Expected |
+| Escalation | Not Required |
+
+---
+
+# False Positive Considerations
+
+Encoded or unusual PowerShell execution can occur legitimately.
+
+Potential legitimate sources include:
+
+- Administrative automation
+- Configuration-management tools
+- Deployment systems
+- Software installers
+- IT support scripts
+- Security tools
+- Developer workflows
+- Authorized security testing
+
+DET-003 should therefore be treated as an investigation signal rather than proof of compromise.
+
+---
+
+# Detection Tuning
+
+Future tuning can incorporate additional context.
+
+```text
+Encoded PowerShell
+       |
+       +---- Unexpected Parent Process
+       |
+       +---- Suspicious Script Block
+       |
+       +---- Network Connection
+       |
+       +---- Unusual Child Process
+       |
+       +---- Sensitive User/Host
+       |
+       v
+Higher Detection Confidence
+```
+
+A production detection could assign greater severity when encoded PowerShell is correlated with additional suspicious endpoint or network behavior.
+
+---
+
+# Skills Demonstrated
+
+Sprint 21 demonstrated practical experience with:
+
+- PowerShell security monitoring
+- Sysmon telemetry analysis
+- PowerShell Script Block Logging
+- Splunk Enterprise
+- SPL development
+- Endpoint detection engineering
+- Process command-line analysis
+- Parent/child process analysis
+- Behavioral detection
+- Positive detection testing
+- Negative detection testing
+- Detection tuning
+- Scheduled SIEM alerting
+- Threat hunting
+- Telemetry correlation
+- MITRE ATT&CK mapping
+- SOC alert triage
+- False-positive analysis
+- Incident investigation
+- Technical documentation
+
+---
+
+# Evidence
+
+Sprint 21 evidence should be stored under:
+
+```text
+screenshots/sprint-21/
+```
+
+Recommended evidence:
+
+```text
+01-powershell-baseline.png
+02-encoded-powershell-event.png
+03-det003-positive-test.png
+04-det003-negative-test.png
+05-det003-alert-config.png
+06-det003-triggered-alert.png
+```
+
+Only screenshots actually captured during the lab should be included.
+
+---
+
+# Sprint 21 Result
+
+**Sprint 21 Status: COMPLETE**
+
+Sprint 21 expanded the SOC lab into endpoint execution detection by developing and validating DET-003.
+
+The completed workflow is:
+
+```text
+PowerShell Execution
+        |
+        v
+Windows Endpoint
+        |
+        +------ Sysmon
+        |
+        +------ PowerShell Logging
+        |
+        v
+Splunk Enterprise
+        |
+        v
+DET-003
+        |
+        | Encoded PowerShell
+        v
+Scheduled Alert
+        |
+        v
+Analyst Investigation
+        |
+        +------ Authorized ------> Document / Close
+        |
+        +------ Suspicious ------> Investigate / Escalate
+```
+
+DET-003 successfully:
+
+- Identified controlled encoded PowerShell execution
+- Ignored normal PowerShell activity during negative testing
+- Generated a scheduled Splunk alert
+- Supported correlation across process, PowerShell, and network telemetry
+- Mapped endpoint behavior to MITRE ATT&CK T1059.001
+- Established an analyst response workflow
+- Added a broader PowerShell hunting capability
+
+Sprint 21 added endpoint execution monitoring to the lab's existing network and identity detection capabilities.
