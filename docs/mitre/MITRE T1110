@@ -1,0 +1,679 @@
+# MITRE ATT&CK T1110 — Brute Force
+
+## ATT&CK Reference
+
+| Field | Value |
+|---|---|
+| Tactic | Credential Access |
+| Technique | Brute Force |
+| Technique ID | T1110 |
+| Lab Detection | DET-002 — Repeated Failed Authentication Detection |
+| Primary Telemetry | Windows Security Event ID 4625 |
+| SIEM | Splunk Enterprise |
+| Status | Validated |
+
+Official MITRE ATT&CK reference:
+
+[T1110 — Brute Force](https://attack.mitre.org/techniques/T1110/)
+
+---
+
+## Technique Overview
+
+Brute-force activity involves attempts to gain access to accounts by systematically attempting authentication credentials.
+
+Observable authentication behavior may include:
+
+- Repeated failed logons
+- Multiple passwords attempted against one account
+- Authentication attempts against multiple accounts
+- High authentication-failure frequency
+- Failed authentication followed by successful authentication
+
+DET-002 focuses on one observable component:
+
+```text
+Repeated Failed Authentication
+against
+TargetUserName
+```
+
+within a short detection window.
+
+---
+
+# ATT&CK Detection Relationship
+
+```text
+Authentication Attempts
+        |
+        v
+Repeated Failures
+        |
+        v
+Windows Event ID 4625
+        |
+        v
+Potential Credential Attack
+        |
+        v
+MITRE ATT&CK
+T1110 — Brute Force
+        |
+        v
+DET-002
+```
+
+DET-002 detects behavior potentially associated with T1110.
+
+It does not determine intent by itself.
+
+---
+
+# ATT&CK Detection Workflow
+
+```text
+┌─────────────────────────────┐
+│      TEST ACTIVITY          │
+│                             │
+│ Controlled Authentication   │
+│ Failures                    │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│     WINDOWS ENDPOINT        │
+│                             │
+│ Authentication Processing   │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│        TELEMETRY            │
+│                             │
+│ Windows Security Log        │
+│ Event ID 4625               │
+│                             │
+│ TargetUserName              │
+│ Logon Type                  │
+│ Failure Reason              │
+│ Source Information          │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│      LOG FORWARDING         │
+│                             │
+│ Splunk Universal Forwarder  │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│           SIEM              │
+│                             │
+│ Splunk Enterprise           │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│     DETECTION LOGIC         │
+│                             │
+│ DET-002                     │
+│                             │
+│ Group by TargetUserName     │
+│ >=5 Failures / 5 Minutes    │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│      ATT&CK MAPPING         │
+│                             │
+│ Credential Access           │
+│ T1110 — Brute Force         │
+└──────────────┬──────────────┘
+               |
+               v
+┌─────────────────────────────┐
+│       SOC RESPONSE          │
+│                             │
+│ Analyst Triage              │
+│ Correlation                 │
+│ Investigation               │
+│ Disposition                 │
+└─────────────────────────────┘
+```
+
+---
+
+# Observable Behavior
+
+DET-002 focuses on:
+
+```text
+One Target Account
+       |
+       v
+Repeated Authentication Failures
+       |
+       v
+Short Time Period
+       |
+       v
+Potential Credential Attack
+```
+
+The lab threshold is:
+
+```text
+>=5 failed authentication events
+within
+5 minutes
+```
+
+This threshold is intended only for the controlled lab.
+
+---
+
+# Detection SPL
+
+```spl
+index=* EventCode=4625 earliest=-5m
+| stats count as failures by TargetUserName
+| where failures>=5
+```
+
+Portfolio output:
+
+```spl
+index=* EventCode=4625 earliest=-5m
+| stats count as failures by TargetUserName
+| where failures>=5
+| eval detection="DET-002 - Repeated Failed Authentication"
+| table detection TargetUserName failures
+```
+
+---
+
+# Positive Validation
+
+Controlled authentication failures were generated until the configured threshold was reached.
+
+```text
+Event 4625
+Event 4625
+Event 4625
+Event 4625
+Event 4625
+      |
+      v
+5 Failures
+      |
+      v
+DET-002 Threshold Reached
+      |
+      v
+DETECTION
+```
+
+Result:
+
+```text
+DET-002 TRIGGERED
+```
+
+**Validation:** PASS
+
+---
+
+# Negative Validation
+
+Below-threshold authentication failures were generated during a clean detection window.
+
+```text
+Event 4625
+Event 4625
+      |
+      v
+2 Failures
+      |
+      v
+Below Threshold
+      |
+      v
+NO DETECTION
+```
+
+Result:
+
+```text
+DET-002 NOT TRIGGERED
+```
+
+**Validation:** PASS
+
+---
+
+# ATT&CK Validation Matrix
+
+| Behavior | Telemetry | Detection | ATT&CK | Result |
+|---|---|---|---|---|
+| Repeated failed authentication | Event 4625 | DET-002 | T1110 | Detected |
+| Below-threshold failures | Event 4625 | DET-002 | T1110 | Not Triggered |
+
+---
+
+# Analyst Response Workflow
+
+When DET-002 triggers:
+
+```text
+DET-002 ALERT
+      |
+      v
+Identify TargetUserName
+      |
+      v
+Determine Failure Count
+      |
+      v
+Identify Source
+      |
+      v
+Review Logon Type
+      |
+      v
+Review Failure Reason
+      |
+      v
+Search Other Target Accounts
+      |
+      v
+Search Successful Logons
+      |
+      v
+Review Endpoint Activity
+      |
+      v
+Determine Context
+      |
+      +-------------------------+
+      |                         |
+      v                         v
+Legitimate                  Suspicious
+      |                         |
+      v                         v
+Document                   Investigate
+      |                         |
+      v                         v
+Close                     Escalate
+```
+
+---
+
+# Step 1 — Identify Target Account
+
+Determine the account associated with the alert.
+
+Primary field:
+
+```text
+TargetUserName
+```
+
+Review:
+
+- Account name
+- Account type
+- Account privilege
+- Whether the account is expected to authenticate from the source
+- Whether the account is a service account
+- Whether the account is privileged
+
+Privileged accounts should generally receive greater investigative attention.
+
+---
+
+# Step 2 — Determine Failure Volume
+
+Review the number of failed authentications:
+
+```spl
+index=* EventCode=4625
+| stats count as failures by TargetUserName
+| sort - failures
+```
+
+Determine:
+
+```text
+How many failures?
+How quickly?
+Is activity continuing?
+```
+
+---
+
+# Step 3 — Identify Source
+
+Review available Event 4625 fields for:
+
+```text
+Source Network Address
+Workstation Name
+host
+```
+
+Determine whether the source is:
+
+- Expected workstation
+- Server
+- Administrative system
+- Unknown endpoint
+- Security-testing system
+
+---
+
+# Step 4 — Review Logon Type
+
+Review the Windows logon type when available.
+
+Logon type can provide important context regarding whether the authentication represents:
+
+- Interactive authentication
+- Network authentication
+- Remote authentication
+- Service-related authentication
+- Other Windows authentication activity
+
+The analyst should interpret the logon type together with the source and target account.
+
+---
+
+# Step 5 — Review Failure Reason
+
+Review:
+
+```text
+Failure Reason
+Status
+Sub Status
+```
+
+These values may help distinguish between:
+
+- Incorrect password
+- Unknown username
+- Disabled account
+- Locked account
+- Other authentication failures
+
+---
+
+# Step 6 — Determine Whether Multiple Accounts Were Targeted
+
+Search:
+
+```spl
+index=* EventCode=4625
+| stats count as failures by TargetUserName
+| sort - failures
+```
+
+Activity affecting many usernames may represent a different credential-access pattern than repeated attempts against one account.
+
+---
+
+# Step 7 — Search for Successful Authentication
+
+Review successful and failed authentication activity together:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625)
+```
+
+Filter for the affected account after identifying the relevant username fields.
+
+Behavior of particular interest:
+
+```text
+FAILED
+4625
+  |
+FAILED
+4625
+  |
+FAILED
+4625
+  |
+FAILED
+4625
+  |
+FAILED
+4625
+  |
+  v
+SUCCESS
+4624
+```
+
+A successful authentication following repeated failures may warrant additional investigation.
+
+---
+
+# Step 8 — Review Related Activity
+
+If suspicious authentication is identified, review telemetry surrounding the event.
+
+Potential sources include:
+
+```text
+Windows Security Logs
+Sysmon
+PowerShell Logs
+Firewall Logs
+Process Creation
+Network Connections
+Account Changes
+Privilege Changes
+```
+
+Investigation should determine whether authentication activity was followed by additional suspicious behavior.
+
+---
+
+# Step 9 — Determine Authorization and Context
+
+Potential legitimate explanations include:
+
+- User forgot password
+- User recently changed password
+- Cached credentials
+- Service using stale password
+- Scheduled task using outdated credentials
+- Mapped network drive
+- Application authentication problem
+- Administrator testing
+- Authorized security testing
+
+If explained:
+
+```text
+Document
+   |
+   v
+Disposition
+   |
+   v
+Close
+```
+
+If unexplained:
+
+```text
+Continue Investigation
+        |
+        v
+Determine Scope
+        |
+        v
+Escalate
+```
+
+---
+
+# Step 10 — Escalation Considerations
+
+Potential indicators for escalation include:
+
+- High failure volume
+- Privileged account targeted
+- Unknown source
+- Multiple accounts targeted
+- Authentication from unexpected systems
+- Successful logon following repeated failures
+- Continued activity after authentication
+- Suspicious process execution
+- Suspicious PowerShell activity
+- Lateral movement indicators
+- Other correlated detections
+
+---
+
+# False Positive Analysis
+
+DET-002 should not be treated as proof of malicious activity.
+
+Potential false positives include:
+
+```text
+Password Typo
+      |
+Password Change
+      |
+Cached Credential
+      |
+Service Account
+      |
+Scheduled Task
+      |
+Mapped Drive
+      |
+Application Failure
+      |
+Administrator Activity
+```
+
+Analyst context is required.
+
+---
+
+# Production Tuning Workflow
+
+```text
+Collect Authentication Baseline
+          |
+          v
+Identify Normal Failure Rates
+          |
+          v
+Identify Service Accounts
+          |
+          v
+Identify Known Noisy Sources
+          |
+          v
+Tune Threshold
+          |
+          v
+Tune Detection Window
+          |
+          v
+Add Source Context
+          |
+          v
+Add Account Sensitivity
+          |
+          v
+Correlate Successful Authentication
+          |
+          v
+Correlate Post-Authentication Activity
+```
+
+---
+
+# Detection-to-Response Lifecycle
+
+```text
+Authentication Attempt
+        |
+        v
+Windows Security Event
+        |
+        v
+Event ID 4625
+        |
+        v
+Splunk
+        |
+        v
+DET-002
+        |
+        v
+Threshold Exceeded
+        |
+        v
+Potential T1110
+        |
+        v
+Alert
+        |
+        v
+Analyst Triage
+        |
+        +----------------------+
+        |                      |
+        v                      v
+    Legitimate             Suspicious
+        |                      |
+        v                      v
+      Close               Investigate
+                               |
+                               v
+                            Escalate
+```
+
+---
+
+# Sprint 20 ATT&CK Coverage
+
+Sprint 20 added coverage for the **Credential Access** tactic.
+
+The lab's detection coverage now includes:
+
+| Detection | Tactic | Technique | ATT&CK ID | Status |
+|---|---|---|---|---|
+| DET-001 | Discovery | Network Service Discovery | T1046 | Validated |
+| DET-002 | Credential Access | Brute Force | T1110 | Validated |
+
+Current coverage:
+
+```text
+MITRE ATT&CK
+     |
+     +---- Discovery
+     |       |
+     |       └── T1046
+     |           Network Service Discovery
+     |                |
+     |                └── DET-001
+     |
+     └---- Credential Access
+             |
+             └── T1110
+                 Brute Force
+                      |
+                      └── DET-002
+```
+
+Future detections will expand ATT&CK coverage across additional tactics and techniques.
