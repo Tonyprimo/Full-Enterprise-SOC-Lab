@@ -1,0 +1,683 @@
+# Sprint 20 — Windows Authentication Detection Engineering
+
+**Status:** ✅ Complete 
+**Detection:** DET-002 — Repeated Failed Authentication Detection 
+**MITRE ATT&CK:** T1110 — Brute Force 
+**Primary Data Source:** Windows Security Event Log 
+**Primary Event ID:** 4625 — An account failed to log on 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Develop and validate a behavioral detection for repeated Windows authentication failures using existing Windows Security telemetry collected by Splunk.
+
+Sprint 20 expanded the SOC lab beyond network-based detection by introducing identity and authentication monitoring.
+
+The sprint focused on:
+
+- Validating domain connectivity
+- Verifying Windows Security telemetry
+- Analyzing Event ID 4625
+- Generating controlled failed authentication attempts
+- Developing DET-002
+- Identifying the correct username field
+- Establishing a behavioral threshold
+- Performing positive and negative validation
+- Operationalizing DET-002 as a scheduled Splunk alert
+- Mapping the detection to MITRE ATT&CK T1110
+- Developing an analyst triage workflow
+- Documenting false-positive and tuning considerations
+
+---
+
+## Environment
+
+| System | Role | IP Address |
+|---|---|---|
+| DC01 | Active Directory Domain Controller / DNS | `10.10.10.10` |
+| SIEM01 | Splunk Enterprise | `10.10.10.20` |
+| WIN11-02 | Domain Workstation / Test Endpoint | CORP-LAN |
+
+Domain:
+
+```text
+corp.lab
+```
+
+Detection pipeline:
+
+```text
+Controlled Authentication Failure
+              |
+              v
+          WIN11-02
+              |
+              v
+Windows Security Event Log
+              |
+              | Event ID 4625
+              v
+Splunk Universal Forwarder
+              |
+              v
+           SIEM01
+              |
+              v
+      Splunk Enterprise
+              |
+              v
+           DET-002
+              |
+              v
+       Scheduled Alert
+              |
+              v
+        Analyst Triage
+```
+
+---
+
+## Work Completed
+
+### Domain and Endpoint Validation
+
+Validated the secure channel between WIN11-02 and the `corp.lab` Active Directory domain.
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+Successful validation returned:
+
+```text
+True
+```
+
+Verified domain name resolution:
+
+```powershell
+Resolve-DnsName dc01.corp.lab
+```
+
+Expected DC01 address:
+
+```text
+10.10.10.10
+```
+
+Verified connectivity to Active Directory services:
+
+```powershell
+Test-NetConnection 10.10.10.10 -Port 445
+Test-NetConnection 10.10.10.10 -Port 389
+```
+
+This confirmed that WIN11-02 could communicate with DC01 before authentication testing began.
+
+---
+
+### Windows Security Telemetry Validation
+
+Verified that Windows events from the lab endpoints were reaching Splunk.
+
+Initial search:
+
+```spl
+index=* host="WIN11-02"
+```
+
+Successful authentication telemetry was validated using:
+
+```spl
+index=* host="WIN11-02" EventCode=4624
+```
+
+Failed authentication telemetry was identified using:
+
+```spl
+index=* EventCode=4625
+```
+
+Event ID 4625 represents:
+
+```text
+An account failed to log on
+```
+
+This established Windows Security Event Logs as the telemetry source for DET-002.
+
+---
+
+### Controlled Authentication Testing
+
+Controlled failed authentication attempts were generated from WIN11-02 using intentionally incorrect credentials against a lab domain resource.
+
+The resulting activity generated Windows Security Event ID:
+
+```text
+4625
+```
+
+The failed authentication events were successfully ingested into Splunk.
+
+Relevant event information included:
+
+```text
+EventCode
+TargetUserName
+Logon Type
+Failure Reason
+Source information
+Host
+Timestamp
+```
+
+---
+
+### Username Field Validation
+
+Initial detection development attempted to group failed authentication activity using:
+
+```text
+Account_Name
+```
+
+However, this field did not contain the required username information in the lab's Windows telemetry.
+
+Inspection of the actual Event 4625 data identified the correct field:
+
+```text
+TargetUserName
+```
+
+The following search successfully grouped failed authentication events by account:
+
+```spl
+index=* EventCode=4625
+| stats count as failures by TargetUserName
+```
+
+This demonstrated the importance of validating actual SIEM field extraction rather than assuming field names.
+
+---
+
+## DET-002 Development
+
+Created:
+
+```text
+DET-002 — Repeated Failed Authentication Detection
+```
+
+Detection objective:
+
+> Identify accounts generating repeated Windows authentication failures within a short period.
+
+Lab threshold:
+
+```text
+5 or more failed authentication events
+within
+5 minutes
+```
+
+Detection SPL:
+
+```spl
+index=* EventCode=4625 earliest=-5m
+| stats count as failures by TargetUserName
+| where failures>=5
+```
+
+Portfolio-formatted output:
+
+```spl
+index=* EventCode=4625 earliest=-5m
+| stats count as failures by TargetUserName
+| where failures>=5
+| eval detection="DET-002 - Repeated Failed Authentication"
+| table detection TargetUserName failures
+```
+
+The detection uses behavioral aggregation rather than identifying a particular authentication tool.
+
+---
+
+## Positive Validation
+
+A controlled series of failed authentication attempts was generated against the lab domain account.
+
+Expected behavior:
+
+```text
+Failed Authentication Attempts >= 5
+```
+
+DET-002 evaluated the resulting Event 4625 telemetry.
+
+Result:
+
+```text
+failures >= 5
+
+DET-002 TRIGGERED
+```
+
+**Positive Validation:** ✅ PASS
+
+This demonstrated that DET-002 successfully identified repeated failed authentication behavior when the configured threshold was exceeded.
+
+---
+
+## Negative Validation
+
+A smaller number of controlled failed authentication attempts was generated during a clean detection window.
+
+Expected behavior:
+
+```text
+Failed Authentication Attempts < 5
+```
+
+The DET-002 query was executed against the negative-test window.
+
+Result:
+
+```text
+failures < 5
+
+DET-002 NOT TRIGGERED
+```
+
+**Negative Validation:** ✅ PASS
+
+This demonstrated that limited failed authentication activity did not automatically generate the detection.
+
+---
+
+## Validation Summary
+
+| Test | Condition | Expected | Result |
+|---|---|---|---|
+| Positive Test | `>=5` failed logons | Trigger DET-002 | ✅ PASS |
+| Negative Test | `<5` failed logons | No detection | ✅ PASS |
+| Field Validation | `TargetUserName` populated | Group by account | ✅ PASS |
+
+---
+
+## Scheduled Alert
+
+DET-002 was operationalized as a scheduled Splunk alert.
+
+Configuration:
+
+```text
+Alert Name:
+DET-002 - Repeated Failed Authentication Detection
+
+Type:
+Scheduled
+
+Schedule:
+Every 5 minutes
+
+Search Window:
+Last 5 minutes
+
+Trigger:
+Number of Results > 0
+
+Severity:
+Medium
+```
+
+A fresh positive test was used to validate the operational alert.
+
+The completed workflow became:
+
+```text
+Authentication Failures
+        |
+        v
+Event ID 4625
+        |
+        v
+Splunk
+        |
+        v
+Group by TargetUserName
+        |
+        v
+Failures >= 5
+        |
+        v
+DET-002
+        |
+        v
+Scheduled Alert
+```
+
+---
+
+## MITRE ATT&CK Mapping
+
+DET-002 was mapped to:
+
+```text
+Tactic:
+Credential Access
+
+Technique:
+Brute Force
+
+Technique ID:
+T1110
+```
+
+The detection identifies repeated failed authentication behavior that may be associated with brute-force attempts.
+
+DET-002 does not establish malicious intent by itself.
+
+Analyst investigation is required to distinguish between malicious activity and legitimate causes such as:
+
+- Mistyped passwords
+- Expired passwords
+- Stale credentials
+- Service-account problems
+- Scheduled tasks
+- Administrative testing
+- Authorized security testing
+
+---
+
+## Analyst Response
+
+When DET-002 triggers, the analyst should:
+
+1. Identify the affected `TargetUserName`.
+2. Determine the number and frequency of failed attempts.
+3. Identify the source host or IP when available.
+4. Review the logon type.
+5. Review the failure reason.
+6. Determine whether multiple accounts were targeted.
+7. Search for successful authentication following the failures.
+8. Review additional activity from the source.
+9. Determine whether the activity has a legitimate explanation.
+10. Escalate unexplained or suspicious authentication activity.
+
+Investigation workflow:
+
+```text
+DET-002 Triggered
+        |
+        v
+Identify Account
+        |
+        v
+Identify Source
+        |
+        v
+Review Failure Count
+        |
+        v
+Review Logon Type
+        |
+        v
+Search for Event 4624
+        |
+        v
+Check Related Activity
+        |
+        v
+Determine Context
+        |
+        +----------------------+
+        |                      |
+        v                      v
+    Authorized             Suspicious
+        |                      |
+        v                      v
+ Document / Close       Investigate / Escalate
+```
+
+---
+
+## False Positive Considerations
+
+Repeated authentication failures can occur for many legitimate reasons.
+
+Potential false positives include:
+
+- User password mistakes
+- Recently changed passwords
+- Cached credentials
+- Mapped drives using old credentials
+- Services using stale passwords
+- Scheduled tasks using outdated credentials
+- Application authentication failures
+- Administrator troubleshooting
+- Authorized penetration testing
+
+Production implementation would require environmental baselining and tuning.
+
+Potential tuning strategies include:
+
+```text
+Baseline Normal Failures
+        |
+        v
+Identify Noisy Accounts
+        |
+        v
+Identify Service Accounts
+        |
+        v
+Tune Failure Threshold
+        |
+        v
+Tune Time Window
+        |
+        v
+Evaluate Source Systems
+        |
+        v
+Consider Account Sensitivity
+        |
+        v
+Correlate Successful Logons
+```
+
+The current threshold of five failures within five minutes was selected specifically for the controlled lab environment.
+
+---
+
+## Troubleshooting and Lessons Learned
+
+### Splunk Event Latency Investigation
+
+During testing, newly generated Event 4625 records initially appeared to have significant Splunk ingestion latency.
+
+Indexing delay was measured using:
+
+```spl
+index=* EventCode=4625
+| eval delay=_indextime-_time
+| table _time _indextime delay host TargetUserName
+| sort - _time
+```
+
+WIN11-02 initially showed approximately:
+
+```text
+366 seconds
+```
+
+of apparent delay.
+
+Investigation determined that DC01 had been paused due to the VM environment timing out.
+
+Because DC01 provides domain services and participates in the Windows domain time hierarchy, the paused domain controller caused time synchronization issues that made the events appear to have significant Splunk ingestion latency.
+
+After DC01 was resumed and system time stabilized, event timing returned to normal.
+
+### Lesson Learned
+
+Apparent SIEM ingestion latency should be validated before modifying forwarder or detection configuration.
+
+Comparing:
+
+```text
+_time
+```
+
+with:
+
+```text
+_indextime
+```
+
+helped distinguish timestamp/time-synchronization problems from actual Splunk forwarding problems.
+
+---
+
+### Splunk Field Validation
+
+The initial SPL attempted to use:
+
+```text
+Account_Name
+```
+
+for account aggregation.
+
+This resulted in no useful Statistics output.
+
+Inspection of the actual Event 4625 telemetry showed that the correct field was:
+
+```text
+TargetUserName
+```
+
+Updating the detection to use `TargetUserName` resolved the issue.
+
+### Lesson Learned
+
+Detection logic should be developed from observed telemetry and validated field names rather than assumed schemas.
+
+---
+
+## Skills Demonstrated
+
+- Windows authentication monitoring
+- Windows Security Event analysis
+- Event ID 4625 investigation
+- Event ID 4624 correlation
+- Splunk Enterprise
+- Splunk SPL
+- Behavioral detection engineering
+- Authentication analytics
+- Threshold-based detection
+- Positive detection testing
+- Negative detection testing
+- SIEM alert development
+- MITRE ATT&CK mapping
+- Credential Access monitoring
+- SOC analyst triage
+- False-positive analysis
+- Detection tuning
+- Active Directory troubleshooting
+- Windows time synchronization troubleshooting
+- SIEM latency investigation
+- Technical documentation
+
+---
+
+## Evidence
+
+Recommended location:
+
+```text
+screenshots/sprint-20/
+```
+
+Evidence captured during Sprint 20 may include:
+
+```text
+01-event4625-telemetry.png
+02-targetusername-validation.png
+03-det002-positive-test.png
+04-det002-negative-test.png
+05-det002-alert-config.png
+06-det002-triggered-alert.png
+```
+
+Only evidence actually captured during the lab should be included in the repository.
+
+---
+
+## Sprint Result
+
+**Sprint 20 Status: COMPLETE**
+
+Sprint 20 expanded the SOC lab into identity-focused detection engineering by developing DET-002 using Windows authentication telemetry.
+
+The completed detection pipeline is:
+
+```text
+Failed Authentication
+        |
+        v
+Windows Security Log
+        |
+        | Event 4625
+        v
+Splunk Universal Forwarder
+        |
+        v
+Splunk Enterprise
+        |
+        v
+TargetUserName Aggregation
+        |
+        v
+DET-002
+        |
+        | >=5 Failures / 5 Minutes
+        v
+Scheduled Alert
+        |
+        v
+Analyst Investigation
+        |
+        +------ Legitimate ------> Document / Close
+        |
+        +------ Suspicious ------> Investigate / Escalate
+```
+
+Sprint 20 demonstrated the complete detection-engineering lifecycle for authentication telemetry:
+
+```text
+Generate Activity
+      ↓
+Collect Telemetry
+      ↓
+Validate Fields
+      ↓
+Develop Detection
+      ↓
+Establish Threshold
+      ↓
+Positive Test
+      ↓
+Negative Test
+      ↓
+Operationalize Alert
+      ↓
+Map MITRE ATT&CK
+      ↓
+Define Analyst Response
+      ↓
+Document Results
+```
