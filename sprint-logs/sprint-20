@@ -1,6 +1,6 @@
 # Sprint 20 — Windows Authentication Detection Engineering
 
-**Status:** ✅ Complete 
+**Status:** Complete 
 **Detection:** DET-002 — Repeated Failed Authentication Detection 
 **MITRE ATT&CK:** T1110 — Brute Force 
 **Primary Data Source:** Windows Security Event Log 
@@ -265,7 +265,7 @@ failures >= 5
 DET-002 TRIGGERED
 ```
 
-**Positive Validation:** ✅ PASS
+**Positive Validation:** PASS
 
 This demonstrated that DET-002 successfully identified repeated failed authentication behavior when the configured threshold was exceeded.
 
@@ -291,7 +291,7 @@ failures < 5
 DET-002 NOT TRIGGERED
 ```
 
-**Negative Validation:** ✅ PASS
+**Negative Validation:** PASS
 
 This demonstrated that limited failed authentication activity did not automatically generate the detection.
 
@@ -301,9 +301,9 @@ This demonstrated that limited failed authentication activity did not automatica
 
 | Test | Condition | Expected | Result |
 |---|---|---|---|
-| Positive Test | `>=5` failed logons | Trigger DET-002 | ✅ PASS |
-| Negative Test | `<5` failed logons | No detection | ✅ PASS |
-| Field Validation | `TargetUserName` populated | Group by account | ✅ PASS |
+| Positive Test | `>=5` failed logons | Trigger DET-002 | PASS |
+| Negative Test | `<5` failed logons | No detection | PASS |
+| Field Validation | `TargetUserName` populated | Group by account | PASS |
 
 ---
 
