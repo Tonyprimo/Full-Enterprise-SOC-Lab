@@ -1,0 +1,520 @@
+# DET-002 — Repeated Failed Authentication Detection
+
+## Detection Metadata
+
+| Field | Value |
+|---|---|
+| Detection ID | DET-002 |
+| Detection Name | Repeated Failed Authentication Detection |
+| Category | Authentication / Credential Access |
+| Severity | Medium |
+| Status | Validated |
+| SIEM | Splunk Enterprise |
+| Data Source | Windows Security Event Log |
+| Primary Event | Event ID 4625 |
+| Detection Type | Behavioral / Threshold-Based |
+| Threshold | `>=5` failed authentications |
+| Detection Window | 5 minutes |
+| MITRE ATT&CK | T1110 — Brute Force |
+| ATT&CK Tactic | Credential Access |
+
+---
+
+## Objective
+
+Detect accounts experiencing repeated Windows authentication failures within a short period.
+
+The detection is intended to identify behavior that may represent:
+
+- Brute-force authentication attempts
+- Password guessing
+- Unauthorized credential testing
+- Misconfigured applications
+- Stale credentials
+- Abnormal authentication activity
+
+A detection does not by itself establish malicious intent.
+
+Analyst investigation is required to determine the cause and context of the authentication failures.
+
+---
+
+## Data Requirements
+
+DET-002 requires Windows Security Event Log telemetry containing:
+
+```text
+Event ID 4625
+```
+
+Primary fields:
+
+```text
+EventCode
+TargetUserName
+host
+_time
+```
+
+Additional useful investigation fields may include:
+
+```text
+Logon Type
+Failure Reason
+Source Network Address
+Workstation Name
+Status
+Sub Status
+```
+
+Data flow:
+
+```text
+Windows Endpoint
+      |
+      v
+Windows Security Log
+      |
+      | Event ID 4625
+      v
+Splunk Universal Forwarder
+      |
+      v
+Splunk Enterprise
+      |
+      v
+DET-002
+```
+
+---
+
+## Detection Logic
+
+DET-002 identifies accounts generating at least five failed authentication events during the configured five-minute detection window.
+
+```spl
+index=* EventCode=4625 earliest=-5m
+| stats count as failures by TargetUserName
+| where failures>=5
+```
+
+### Portfolio Output
+
+```spl
+index=* EventCode=4625 earliest=-5m
+| stats count as failures by TargetUserName
+| where failures>=5
+| eval detection="DET-002 - Repeated Failed Authentication"
+| table detection TargetUserName failures
+```
+
+---
+
+## Detection Logic Explained
+
+```text
+Windows Security Events
+          |
+          v
+     Event ID 4625
+          |
+          v
+Group by TargetUserName
+          |
+          v
+Count Failed Logons
+          |
+          v
+   failures >= 5?
+       /       \
+      NO       YES
+      |         |
+      v         v
+ No Detection  DET-002
+```
+
+The threshold was selected specifically for the controlled SOC lab.
+
+It should not be interpreted as a universal production threshold.
+
+---
+
+## Positive Validation
+
+Controlled failed authentication activity was generated against a lab domain account.
+
+Test condition:
+
+```text
+>=5 failed authentication attempts
+within the detection window
+```
+
+Splunk received corresponding Event ID 4625 telemetry.
+
+DET-002 returned the affected `TargetUserName` with a failure count meeting or exceeding the configured threshold.
+
+Result:
+
+```text
+failures >= 5
+
+DET-002 TRIGGERED
+```
+
+**Positive Test:** PASS
+
+---
+
+## Negative Validation
+
+A smaller number of failed authentication attempts was generated during a clean detection window.
+
+Test condition:
+
+```text
+<5 failed authentication attempts
+```
+
+DET-002 returned no detection result.
+
+Result:
+
+```text
+failures < 5
+
+DET-002 NOT TRIGGERED
+```
+
+**Negative Test:** PASS
+
+---
+
+## Validation Matrix
+
+| Test | Condition | Expected | Result |
+|---|---|---|---|
+| Positive | `>=5` Event 4625 records for account | Trigger | PASS |
+| Negative | `<5` Event 4625 records for account | No Trigger | PASS |
+| Username Field | `TargetUserName` | Account identified | PASS |
+| SIEM Ingestion | Security events reach Splunk | Events searchable | PASS |
+
+---
+
+## Scheduled Alert
+
+DET-002 was operationalized as a scheduled Splunk alert.
+
+```text
+Alert:
+DET-002 - Repeated Failed Authentication Detection
+
+Type:
+Scheduled
+
+Frequency:
+Every 5 minutes
+
+Search Window:
+Last 5 minutes
+
+Trigger:
+Number of Results > 0
+
+Severity:
+Medium
+```
+
+Operational workflow:
+
+```text
+Event 4625
+    |
+    v
+Splunk
+    |
+    v
+DET-002
+    |
+    v
+Threshold Exceeded
+    |
+    v
+Alert
+    |
+    v
+Analyst Triage
+```
+
+---
+
+## MITRE ATT&CK Mapping
+
+### T1110 — Brute Force
+
+| Field | Value |
+|---|---|
+| Tactic | Credential Access |
+| Technique | Brute Force |
+| Technique ID | T1110 |
+| Detection | DET-002 |
+| Telemetry | Windows Security Event 4625 |
+
+Official reference:
+
+[T1110 — Brute Force](https://attack.mitre.org/techniques/T1110/)
+
+DET-002 identifies repeated authentication failures that may be consistent with brute-force or password-guessing behavior.
+
+The detection is behavioral and does not attempt to identify a particular attack tool.
+
+---
+
+## Analyst Triage
+
+When DET-002 triggers:
+
+```text
+DET-002
+   |
+   v
+Identify TargetUserName
+   |
+   v
+Review Failure Count
+   |
+   v
+Identify Source
+   |
+   v
+Review Logon Type
+   |
+   v
+Review Failure Reason
+   |
+   v
+Search Successful Logons
+   |
+   v
+Review Related Activity
+   |
+   v
+Determine Context
+```
+
+The analyst should determine:
+
+1. Which account was targeted?
+2. How many failures occurred?
+3. How quickly did they occur?
+4. Which host or IP generated them?
+5. What logon type was involved?
+6. What was the failure reason?
+7. Were multiple accounts targeted?
+8. Did authentication eventually succeed?
+9. Is the source expected?
+10. Is there related suspicious activity?
+
+---
+
+## Successful Authentication Correlation
+
+A particularly important investigation is determining whether failed authentication was followed by a successful logon.
+
+Search:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625)
+```
+
+Then filter for the affected account using the appropriate username field.
+
+Behavior of interest:
+
+```text
+4625
+4625
+4625
+4625
+4625
+  |
+  v
+4624
+```
+
+Repeated failures followed by successful authentication may warrant increased investigation priority.
+
+---
+
+## Multiple-Account Analysis
+
+An analyst can review which accounts are receiving the highest volume of failed authentication attempts:
+
+```spl
+index=* EventCode=4625
+| stats count as failures by TargetUserName
+| sort - failures
+```
+
+This can help distinguish activity against a single account from broader authentication activity affecting multiple accounts.
+
+---
+
+## False Positives
+
+Potential legitimate causes include:
+
+- User password mistakes
+- Password changes
+- Expired passwords
+- Cached credentials
+- Mapped drives using stale credentials
+- Services using outdated passwords
+- Scheduled tasks using stale credentials
+- Application authentication failures
+- Administrative troubleshooting
+- Authorized security testing
+
+---
+
+## Tuning Recommendations
+
+Production tuning could include:
+
+- Establishing normal authentication-failure baselines
+- Increasing or decreasing the failure threshold
+- Adjusting the detection window
+- Identifying service accounts
+- Identifying known noisy applications
+- Correlating source IP addresses
+- Considering account privilege/sensitivity
+- Detecting one source targeting many accounts
+- Detecting many sources targeting one account
+- Correlating subsequent successful authentication
+- Correlating endpoint activity following authentication
+
+Potential future detections could separate:
+
+```text
+Many Passwords → One Account
+```
+
+from:
+
+```text
+One/Few Passwords → Many Accounts
+```
+
+rather than treating all authentication failures as the same behavior.
+
+---
+
+## Analyst Disposition Example
+
+For controlled lab validation:
+
+| Field | Value |
+|---|---|
+| Detection | DET-002 |
+| Activity | Repeated Failed Authentication |
+| Source | Lab Workstation |
+| Target | Lab Domain Account |
+| Event | Windows Security 4625 |
+| ATT&CK | T1110 — Brute Force |
+| Authorization | Authorized Lab Simulation |
+| Disposition | Benign / Expected |
+| Escalation | Not Required |
+
+---
+
+## Detection Limitations
+
+DET-002 currently:
+
+- Relies on Event ID 4625 visibility
+- Uses a static lab threshold
+- Groups activity primarily by `TargetUserName`
+- Does not independently establish malicious intent
+- Does not currently distinguish between authentication protocols
+- Does not currently correlate source IP and account simultaneously
+- Does not automatically identify successful compromise
+
+These limitations represent opportunities for future detection tuning and correlation.
+
+---
+
+## Detection Engineering Lifecycle
+
+```text
+Authentication Behavior
+        |
+        v
+Event 4625 Telemetry
+        |
+        v
+Field Validation
+        |
+        v
+TargetUserName
+        |
+        v
+Behavioral Aggregation
+        |
+        v
+Threshold
+        |
+        v
+Positive Test
+        |
+        v
+Negative Test
+        |
+        v
+Scheduled Alert
+        |
+        v
+MITRE Mapping
+        |
+        v
+Analyst Triage
+```
+
+---
+
+## Evidence
+
+Supporting evidence:
+
+```text
+screenshots/sprint-20/
+```
+
+Recommended evidence:
+
+```text
+Event 4625 telemetry
+TargetUserName field validation
+DET-002 positive test
+DET-002 negative test
+Scheduled alert configuration
+Triggered alert
+```
+
+---
+
+## Detection Status
+
+```text
+DET-002
+Repeated Failed Authentication Detection
+
+Development:        COMPLETE
+Field Validation:   PASS
+Positive Test:      PASS
+Negative Test:      PASS
+Alerting:           OPERATIONAL
+MITRE Mapping:      COMPLETE
+Analyst Workflow:   DOCUMENTED
+
+STATUS: VALIDATED
+```
