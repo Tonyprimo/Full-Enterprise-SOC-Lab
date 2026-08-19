@@ -1,0 +1,811 @@
+# MITRE ATT&CK T1053.005 — Scheduled Task
+
+## ATT&CK Reference
+
+| Field | Value |
+|---|---|
+| Tactic | Persistence |
+| Technique | Scheduled Task/Job |
+| Sub-technique | Scheduled Task |
+| Technique ID | T1053.005 |
+| Lab Detection | DET-004 — Suspicious Scheduled Task Creation |
+| Primary Telemetry | Windows Endpoint Telemetry |
+| SIEM | Splunk Enterprise |
+| Status | Validated |
+
+Official MITRE ATT&CK reference:
+
+[T1053.005 — Scheduled Task](https://attack.mitre.org/techniques/T1053/005/)
+
+---
+
+# Technique Overview
+
+Windows Scheduled Tasks provide a native mechanism for executing programs or commands according to defined triggers.
+
+Legitimate uses include:
+
+- System maintenance
+- Application updates
+- Backup operations
+- Enterprise management
+- Administrative automation
+
+The same capability can also be used to execute commands or establish persistence.
+
+Sprint 22 focuses on the observable behavior:
+
+```text
+schtasks.exe
+      +
+/create
+```
+
+DET-004 provides visibility into command-line scheduled-task creation.
+
+---
+
+# ATT&CK Detection Relationship
+
+```text
+Scheduled Task Creation
+        |
+        v
+Windows Endpoint
+        |
+        v
+Endpoint Telemetry
+        |
+        v
+Splunk
+        |
+        v
+DET-004
+        |
+        v
+MITRE ATT&CK
+T1053.005
+```
+
+DET-004 identifies behavior potentially associated with T1053.005.
+
+It does not determine intent by itself.
+
+---
+
+# Observable Behavior
+
+The lab detection focuses on:
+
+```text
+schtasks.exe /create
+```
+
+Conceptually:
+
+```text
+Process Execution
+       |
+       v
+schtasks.exe
+       |
+       v
+/create
+       |
+       v
+New Scheduled Task
+       |
+       v
+Potential Persistence
+```
+
+---
+
+# Detection SPL
+
+Validated detection concept:
+
+```spl
+index=* "schtasks.exe" "/create"
+```
+
+Host-specific validation:
+
+```spl
+index=* host="WIN11-02" "schtasks.exe" "/create"
+```
+
+Portfolio output:
+
+```spl
+index=* "schtasks.exe" "/create"
+| eval detection="DET-004 - Suspicious Scheduled Task Creation"
+| table _time detection host _raw
+```
+
+The detection intentionally uses fields and observable strings confirmed in the lab rather than relying on an assumed EventCode mapping.
+
+---
+
+# Controlled Validation
+
+A benign scheduled task was created:
+
+```cmd
+schtasks /create /tn "Sprint22-DET004-Positive" /tr "cmd.exe /c echo DET004 Positive >> C:\Windows\Temp\DET004.txt" /sc once /st 23:59 /f
+```
+
+The task performed no harmful activity.
+
+The objective was to reproduce scheduled-task creation behavior safely.
+
+---
+
+# Positive Test
+
+```text
+schtasks.exe
+      |
+      v
+/create
+      |
+      v
+New Scheduled Task
+      |
+      v
+Endpoint Telemetry
+      |
+      v
+Splunk
+      |
+      v
+DET-004
+      |
+      v
+TRIGGER
+```
+
+**Result:** PASS
+
+---
+
+# Negative Test
+
+Normal task enumeration was performed:
+
+```cmd
+schtasks /query
+```
+
+This produced scheduled-task-related activity without creating a task.
+
+```text
+schtasks.exe
+      |
+      v
+/query
+      |
+      v
+No /create
+      |
+      v
+DET-004
+      |
+      v
+NO TRIGGER
+```
+
+**Result:** PASS
+
+---
+
+# ATT&CK Validation Matrix
+
+| Behavior | Detection | ATT&CK | Result |
+|---|---|---|---|
+| Command-line task creation | DET-004 | T1053.005 | Detected |
+| Task enumeration | DET-004 | T1053.005 | Not Triggered |
+| Scheduled alert validation | DET-004 | T1053.005 | Triggered |
+
+---
+
+# Analyst Response Workflow
+
+```text
+DET-004 ALERT
+       |
+       v
+Identify Endpoint
+       |
+       v
+Identify User
+       |
+       v
+Identify Task Name
+       |
+       v
+Review Task Action
+       |
+       v
+Review Trigger
+       |
+       v
+Review Execution Context
+       |
+       v
+Review Parent Process
+       |
+       v
+Review Related Processes
+       |
+       v
+Review Network Activity
+       |
+       v
+Correlate Other Detections
+       |
+       v
+Determine Authorization
+       |
+       +-------------------------+
+       |                         |
+       v                         v
+   Legitimate                Suspicious
+       |                         |
+       v                         v
+ Document / Close          Investigate
+                                 |
+                                 v
+                              Escalate
+```
+
+---
+
+# Step 1 — Identify Endpoint
+
+Determine which endpoint generated the task-creation activity.
+
+Review:
+
+```text
+host
+Computer
+```
+
+Questions:
+
+- Is this a workstation or server?
+- Is scheduled-task creation expected?
+- Is the system sensitive?
+- Is the activity normal for the asset?
+
+---
+
+# Step 2 — Identify User
+
+Determine which account initiated task creation.
+
+Questions:
+
+- Is the user authorized?
+- Is the account privileged?
+- Does this account normally administer the endpoint?
+- Was the account recently involved in authentication anomalies?
+
+This provides a potential correlation point with DET-002.
+
+---
+
+# Step 3 — Identify Task
+
+Determine:
+
+```text
+Task Name
+Task Path
+```
+
+Evaluate whether the task name appears:
+
+- Expected
+- Application-related
+- Administrative
+- Randomized
+- Misleading
+- Unusual for the endpoint
+
+Task names alone should not determine maliciousness.
+
+---
+
+# Step 4 — Review Task Action
+
+Determine what the scheduled task executes.
+
+Potential actions may include:
+
+```text
+Executable
+PowerShell
+Command Prompt
+Batch Script
+PowerShell Script
+Other Script Interpreter
+Application
+```
+
+The action is one of the most important pieces of investigative context.
+
+---
+
+# Step 5 — Review Trigger
+
+Determine when the task executes.
+
+Potential triggers include:
+
+```text
+Specific Time
+Logon
+Startup
+Recurring Schedule
+System Event
+Other Trigger
+```
+
+The trigger can help determine whether the task appears consistent with persistence.
+
+---
+
+# Step 6 — Review Execution Context
+
+Determine which account executes the task.
+
+Examples:
+
+```text
+User Account
+Administrator
+SYSTEM
+Service Account
+```
+
+Privileged execution may increase the impact of suspicious activity.
+
+---
+
+# Step 7 — Review Process Lineage
+
+Determine what process created the task.
+
+Conceptually:
+
+```text
+Parent Process
+      |
+      v
+schtasks.exe
+      |
+      v
+Scheduled Task Creation
+```
+
+Additional context may reveal:
+
+```text
+powershell.exe
+      |
+      v
+schtasks.exe
+```
+
+or:
+
+```text
+cmd.exe
+   |
+   v
+schtasks.exe
+```
+
+Process lineage can significantly change investigative context.
+
+---
+
+# Step 8 — Correlate PowerShell Activity
+
+Sprint 21 introduced:
+
+```text
+DET-003
+Encoded PowerShell Execution
+T1059.001
+```
+
+Potential correlation:
+
+```text
+Encoded PowerShell
+       |
+       v
+Scheduled Task Creation
+       |
+       v
+Potential Persistence Chain
+```
+
+A sequence involving both detections would generally deserve more attention than either signal independently.
+
+---
+
+# Step 9 — Review Network Activity
+
+Determine whether suspicious network activity occurred around the task creation.
+
+Potential sequence:
+
+```text
+PowerShell
+    |
+    v
+Network Activity
+    |
+    v
+Scheduled Task Creation
+```
+
+or:
+
+```text
+Scheduled Task
+      |
+      v
+External Connection
+```
+
+Network correlation can provide additional context about the purpose of a task.
+
+---
+
+# Step 10 — Determine Legitimate Use
+
+Potential legitimate explanations include:
+
+- Software installation
+- Software updates
+- Backup software
+- Monitoring software
+- Windows maintenance
+- Enterprise management
+- Administrator automation
+- IT support activity
+- Security tooling
+- Authorized testing
+
+If validated:
+
+```text
+Expected Activity
+      |
+      v
+Document
+      |
+      v
+Close
+```
+
+---
+
+# Step 11 — Escalation Considerations
+
+Potential escalation indicators include:
+
+- Unknown task
+- Unexpected user
+- Privileged execution
+- SYSTEM execution
+- Suspicious task action
+- Script interpreter execution
+- User-writable executable path
+- Temporary-directory execution
+- Unexpected parent process
+- Encoded PowerShell correlation
+- Suspicious network connections
+- Other related SOC alerts
+
+Conceptually:
+
+```text
+Task Creation
+      +
+Suspicious Action
+      +
+Privileged Context
+      +
+Endpoint Correlation
+      +
+Network Activity
+      |
+      v
+Higher Investigative Priority
+```
+
+---
+
+# Threat Hunting Workflow
+
+Broader scheduled-task hunting:
+
+```spl
+index=* ("schtasks.exe" OR "Register-ScheduledTask")
+```
+
+Saved as:
+
+```text
+HUNT - Scheduled Task Activity
+```
+
+Workflow:
+
+```text
+Scheduled Task Activity
+        |
+        v
+Identify Creation/Modification
+        |
+        v
+Review Task
+        |
+        v
+Review User
+        |
+        v
+Review Action
+        |
+        v
+Review Trigger
+        |
+        v
+Review Process Lineage
+        |
+        v
+Determine Context
+```
+
+---
+
+# Detection vs. Threat Hunting
+
+DET-004:
+
+```text
+schtasks.exe
+     +
+/create
+     |
+     v
+Alert
+```
+
+Threat hunting:
+
+```text
+schtasks.exe
+Register-ScheduledTask
+Other Task Activity
+     |
+     v
+Analyst Investigation
+```
+
+This allows broad visibility without generating excessive alerts.
+
+---
+
+# False Positive Analysis
+
+Scheduled tasks are a normal Windows feature.
+
+Potential false positives include:
+
+```text
+Operating System
+      |
+Software Installation
+      |
+Application Update
+      |
+Backup
+      |
+Monitoring
+      |
+Enterprise Management
+      |
+Administrator Automation
+```
+
+Therefore:
+
+```text
+Scheduled Task != Malicious
+```
+
+and:
+
+```text
+Scheduled Task Creation != Confirmed Persistence
+```
+
+Context determines severity.
+
+---
+
+# Detection Confidence Model
+
+### Basic Signal
+
+```text
+Scheduled Task Creation
+```
+
+### Increased Confidence
+
+```text
+Scheduled Task Creation
+        +
+Unexpected User
+```
+
+### Higher Confidence
+
+```text
+Scheduled Task Creation
+        +
+Unexpected User
+        +
+Suspicious Action
+        +
+Privileged Execution
+```
+
+### Stronger Correlation
+
+```text
+Encoded PowerShell
+        +
+Scheduled Task Creation
+        +
+Suspicious Action
+        +
+Network Activity
+        |
+        v
+Higher Investigative Priority
+```
+
+This demonstrates how individual behavioral detections can eventually become correlated SOC analytics.
+
+---
+
+# Telemetry Engineering Lesson
+
+Sprint 22 also demonstrated the importance of validating SIEM schemas.
+
+Initial investigation assumed:
+
+```text
+Sysmon Event ID 1
+        =
+Splunk EventCode=1
+```
+
+That assumption did not correctly identify the relevant task telemetry in the lab.
+
+The successful workflow became:
+
+```text
+Generate Known Activity
+       |
+       v
+Observe Endpoint
+       |
+       v
+Search Splunk Broadly
+       |
+       v
+Identify Actual Representation
+       |
+       v
+Build Detection
+```
+
+This is a critical detection-engineering practice because SIEM field extraction can vary by:
+
+- Input
+- Sourcetype
+- Parser
+- Add-on
+- Log format
+- Forwarder configuration
+
+Detections should therefore be validated against actual indexed telemetry.
+
+---
+
+# Analyst Disposition — Sprint 22
+
+| Field | Value |
+|---|---|
+| Detection | DET-004 |
+| Technique | T1053.005 — Scheduled Task |
+| Endpoint | WIN11-02 |
+| Task | Sprint22-DET004-Alert |
+| Creation Method | `schtasks.exe /create` |
+| Action | Benign local command |
+| Authorization | Authorized Security Simulation |
+| Related PowerShell | Reviewed |
+| Network Activity | No suspicious activity expected |
+| Disposition | Benign / Expected |
+| Escalation | Not Required |
+
+---
+
+# Current ATT&CK Coverage
+
+Following Sprint 22:
+
+| Detection | Tactic | Technique | ATT&CK ID | Status |
+|---|---|---|---|---|
+| DET-001 | Discovery | Network Service Discovery | T1046 | ✅ Validated |
+| DET-002 | Credential Access | Brute Force | T1110 | ✅ Validated |
+| DET-003 | Execution | PowerShell | T1059.001 | ✅ Validated |
+| DET-004 | Persistence | Scheduled Task | T1053.005 | ✅ Validated |
+
+Current coverage:
+
+```text
+MITRE ATT&CK
+      |
+      +---- DISCOVERY
+      |       |
+      |       └── T1046
+      |           Network Service Discovery
+      |                |
+      |                └── DET-001
+      |
+      +---- CREDENTIAL ACCESS
+      |       |
+      |       └── T1110
+      |           Brute Force
+      |                |
+      |                └── DET-002
+      |
+      +---- EXECUTION
+      |       |
+      |       └── T1059.001
+      |           PowerShell
+      |                |
+      |                └── DET-003
+      |
+      └---- PERSISTENCE
+              |
+              └── T1053.005
+                  Scheduled Task
+                       |
+                       └── DET-004
+```
+
+Sprint 22 expanded the SOC lab into its fourth major ATT&CK tactic: **Persistence**.
+
+The detection portfolio now demonstrates visibility across:
+
+```text
+Network Reconnaissance
+        ↓
+Credential Activity
+        ↓
+Endpoint Execution
+        ↓
+Persistence
+```
