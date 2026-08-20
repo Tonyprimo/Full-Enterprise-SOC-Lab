@@ -1,0 +1,834 @@
+# MITRE ATT&CK T1098.007 — Additional Local or Domain Groups
+
+## ATT&CK Reference
+
+| Field | Value |
+|---|---|
+| Tactics | Persistence / Privilege Escalation |
+| Technique | Account Manipulation |
+| Sub-technique | Additional Local or Domain Groups |
+| Technique ID | T1098.007 |
+| Lab Detection | DET-005 — Privileged Domain Group Membership Change |
+| Primary Telemetry | Windows Security Event ID 4728 |
+| SIEM | Splunk Enterprise |
+| Status | Validated |
+
+Official MITRE ATT&CK reference:
+
+[T1098.007 — Additional Local or Domain Groups](https://attack.mitre.org/techniques/T1098/007/)
+
+---
+
+# Technique Overview
+
+Account privileges can be modified by changing membership in local or domain security groups.
+
+Within an Active Directory environment, membership in highly privileged groups can significantly increase an account's capabilities.
+
+Examples include:
+
+```text
+Domain Admins
+Enterprise Admins
+Schema Admins
+```
+
+Sprint 23 focuses on:
+
+```text
+Domain Account
+      |
+      v
+Added to Privileged Domain Group
+      |
+      v
+Privilege Change
+```
+
+This behavior maps to:
+
+```text
+T1098.007
+Account Manipulation:
+Additional Local or Domain Groups
+```
+
+---
+
+# ATT&CK Relationship
+
+```text
+Account
+   |
+   v
+Group Membership Modified
+   |
+   v
+Privileged Group
+   |
+   v
+Access Increased
+   |
+   v
+Persistence /
+Privilege Escalation
+   |
+   v
+T1098.007
+```
+
+---
+
+# Detection Relationship
+
+```text
+Active Directory
+       |
+       v
+Privileged Group Addition
+       |
+       v
+Windows Security 4728
+       |
+       v
+Splunk
+       |
+       v
+DET-005
+       |
+       v
+T1098.007
+```
+
+---
+
+# Primary Telemetry
+
+Sprint 23 uses:
+
+```text
+Windows Security Event ID 4728
+```
+
+Event meaning:
+
+```text
+A member was added to a security-enabled global group.
+```
+
+Important event context includes:
+
+```text
+Actor
+Added Member
+Target Group
+Domain
+Timestamp
+Security Identifiers
+```
+
+---
+
+# Event Relationships
+
+A group membership event can be understood as:
+
+```text
+SUBJECT
+Who made the change?
+      |
+      v
+ACTION
+Added member
+      |
+      v
+MEMBER
+Who received access?
+      |
+      v
+TARGET GROUP
+Which group granted access?
+```
+
+For the lab:
+
+```text
+Authorized Administrator
+        |
+        v
+Adds det005test
+        |
+        v
+Domain Admins
+```
+
+---
+
+# DET-005
+
+Detection:
+
+```text
+DET-005 — Privileged Domain Group Membership Change
+```
+
+Initial SPL:
+
+```spl
+index=* EventCode=4728 "Domain Admins"
+```
+
+Expanded SPL:
+
+```spl
+index=* EventCode=4728
+("Domain Admins" OR "Enterprise Admins" OR "Schema Admins")
+```
+
+Portfolio output:
+
+```spl
+index=* EventCode=4728
+("Domain Admins" OR "Enterprise Admins" OR "Schema Admins")
+| eval detection="DET-005 - Privileged Domain Group Membership Change"
+| table _time detection host _raw
+```
+
+---
+
+# Controlled Validation
+
+A dedicated domain account was used:
+
+```text
+CORP\det005test
+```
+
+Baseline:
+
+```text
+det005test
+     |
+     X
+Domain Admins
+```
+
+Controlled modification:
+
+```powershell
+Add-ADGroupMember -Identity "Domain Admins" -Members det005test
+```
+
+Result:
+
+```text
+det005test
+     |
+     v
+Domain Admins
+```
+
+The modification generated the security telemetry used to validate DET-005.
+
+---
+
+# Positive Validation
+
+The account was removed and re-added to generate a fresh event.
+
+```powershell
+Remove-ADGroupMember -Identity "Domain Admins" -Members det005test -Confirm:$false
+```
+
+```powershell
+Add-ADGroupMember -Identity "Domain Admins" -Members det005test
+```
+
+Detection result:
+
+```text
+DET-005 TRIGGERED
+```
+
+**Result:** PASS
+
+---
+
+# Negative Validation
+
+A non-privileged security group was created:
+
+```text
+DET005-NormalGroup
+```
+
+The account was added to that group.
+
+```powershell
+Add-ADGroupMember -Identity "DET005-NormalGroup" -Members det005test
+```
+
+The membership change generated telemetry, but DET-005 did not identify it as a privileged-group addition.
+
+```text
+Normal Group Addition
+        |
+        v
+Event 4728
+        |
+        v
+Not Privileged
+        |
+        v
+NO DET-005
+```
+
+**Result:** PASS
+
+---
+
+# ATT&CK Validation Matrix
+
+| Behavior | Telemetry | Detection | Result |
+|---|---|---|---|
+| Domain Admin addition | Event 4728 | DET-005 | Detected |
+| Normal group addition | Event 4728 | DET-005 | Not Triggered |
+| Scheduled alert | Event 4728 | DET-005 | Triggered |
+| Account investigation | AD / Security logs | Analyst Workflow | Validated |
+
+---
+
+# Analyst Response Workflow
+
+```text
+DET-005 ALERT
+       |
+       v
+Identify Group
+       |
+       v
+Identify Added Member
+       |
+       v
+Identify Actor
+       |
+       v
+Validate Authorization
+       |
+       v
+Review Account Creation
+       |
+       v
+Review Authentication
+       |
+       v
+Review Endpoint Activity
+       |
+       v
+Review Other Alerts
+       |
+       v
+Determine Scope
+       |
+       v
+Disposition
+```
+
+---
+
+# Step 1 — Identify Target Group
+
+Determine which group received the new member.
+
+Examples requiring high-priority review:
+
+```text
+Domain Admins
+Enterprise Admins
+Schema Admins
+```
+
+Questions:
+
+- What privileges does the group provide?
+- Is membership tightly controlled?
+- Is the change expected?
+- Is the group appropriate for the account?
+
+---
+
+# Step 2 — Identify Added Account
+
+Determine:
+
+```text
+Who received the membership?
+```
+
+Review:
+
+- Username
+- Account age
+- Enabled status
+- Existing privileges
+- Organizational purpose
+- Previous logons
+- Recent activity
+
+Example:
+
+```powershell
+Get-ADUser det005test -Properties *
+```
+
+---
+
+# Step 3 — Identify Actor
+
+Determine:
+
+```text
+Who made the change?
+```
+
+This distinction is critical.
+
+```text
+Actor
+   !=
+Added Member
+```
+
+An attacker controlling one administrative account could grant privileges to a different account.
+
+Questions:
+
+- Was the actor authorized?
+- Is the actor an expected administrator?
+- Was the source system expected?
+- Was the account recently involved in suspicious activity?
+
+---
+
+# Step 4 — Review Account Creation
+
+Search:
+
+```spl
+index=* EventCode=4720 "det005test"
+```
+
+Potential high-risk sequence:
+
+```text
+Account Created
+      |
+      v
+Privileged Group Addition
+      |
+      v
+Privileged Account Established
+```
+
+A newly created account immediately receiving privileged access should receive additional scrutiny.
+
+---
+
+# Step 5 — Review Authentication
+
+Search:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625) "det005test"
+```
+
+Determine:
+
+- Previous successful logons
+- Failed logons
+- Source endpoints
+- Logon types
+- Timing relative to the group change
+
+Potential correlation:
+
+```text
+Repeated Failed Logons
+        |
+        v
+Successful Authentication
+        |
+        v
+Domain Admin Addition
+```
+
+---
+
+# Step 6 — Review Endpoint Activity
+
+Search for related endpoint behavior around the same timeframe.
+
+Existing detection coverage includes:
+
+```text
+DET-003
+Encoded PowerShell Execution
+
+DET-004
+Suspicious Scheduled Task Creation
+```
+
+Potential chain:
+
+```text
+PowerShell
+     |
+     v
+Scheduled Task
+     |
+     v
+Privileged Group Addition
+```
+
+Multiple related signals increase investigative confidence.
+
+---
+
+# Step 7 — Validate Authorization
+
+Determine whether the membership change corresponds to:
+
+- Approved administrative work
+- Onboarding
+- Temporary elevation
+- Emergency access
+- Infrastructure maintenance
+- Service configuration
+- Authorized testing
+
+If authorized:
+
+```text
+Validate
+   |
+   v
+Document
+   |
+   v
+Close
+```
+
+---
+
+# Step 8 — Investigate Unauthorized Changes
+
+If the change cannot be validated:
+
+```text
+Unauthorized Privileged Addition
+              |
+              v
+Identify Added Account
+              |
+              v
+Identify Actor
+              |
+              v
+Determine Source
+              |
+              v
+Review Authentication
+              |
+              v
+Review Related Changes
+              |
+              v
+Determine Scope
+              |
+              v
+Contain / Escalate
+```
+
+---
+
+# Correlation Opportunities
+
+The lab can now correlate several independent detection types.
+
+## Authentication + Privilege
+
+```text
+DET-002
+Repeated Failed Authentication
+        |
+        v
+DET-005
+Privileged Group Addition
+```
+
+## Execution + Privilege
+
+```text
+DET-003
+Encoded PowerShell
+        |
+        v
+DET-005
+Privileged Group Addition
+```
+
+## Persistence + Privilege
+
+```text
+DET-004
+Scheduled Task Creation
+        |
+        v
+DET-005
+Privileged Group Addition
+```
+
+## Multi-Stage Sequence
+
+```text
+DET-002
+Authentication Anomaly
+       |
+       v
+DET-003
+PowerShell Execution
+       |
+       v
+DET-004
+Scheduled Task
+       |
+       v
+DET-005
+Privileged Group Addition
+       |
+       v
+Potential Incident
+```
+
+This provides the foundation for future correlation and incident-response sprints.
+
+---
+
+# Threat Hunting
+
+Broader group-addition hunting:
+
+```spl
+index=* (EventCode=4728 OR EventCode=4732 OR EventCode=4756)
+```
+
+Saved as:
+
+```text
+HUNT - Security Group Membership Additions
+```
+
+Conceptually:
+
+```text
+All Security Group Additions
+          |
+          v
+Identify Target Group
+          |
+          v
+Identify Added Account
+          |
+          v
+Identify Actor
+          |
+          v
+Determine Risk
+```
+
+---
+
+# Detection vs. Hunting
+
+```text
+DET-005
+Privileged Groups Only
+        |
+        v
+High-Severity Alert
+```
+
+versus:
+
+```text
+HUNT
+All Security Group Additions
+        |
+        v
+Analyst Review
+```
+
+---
+
+# False Positive Analysis
+
+Legitimate privileged-group additions may include:
+
+```text
+Administrator Onboarding
+Temporary Elevation
+Break-Glass Access
+Emergency Maintenance
+Infrastructure Changes
+Service Configuration
+Approved Access Changes
+Security Testing
+```
+
+Therefore:
+
+```text
+Domain Admin Addition
+        !=
+Confirmed Account Compromise
+```
+
+But the potential impact justifies rapid review.
+
+---
+
+# Detection Confidence
+
+### Base Signal
+
+```text
+Privileged Group Addition
+```
+
+### Increased Risk
+
+```text
+Privileged Group Addition
+        +
+New Account
+```
+
+### Higher Risk
+
+```text
+Privileged Group Addition
+        +
+New Account
+        +
+Recent Failed Authentication
+```
+
+### Strong Correlation
+
+```text
+Authentication Anomaly
+        +
+Suspicious PowerShell
+        +
+Persistence Activity
+        +
+Privileged Group Addition
+        |
+        v
+High Investigative Priority
+```
+
+---
+
+# Severity
+
+DET-005 severity:
+
+```text
+HIGH
+```
+
+Rationale:
+
+A privileged group membership change can immediately grant substantial access.
+
+The detection therefore deserves rapid analyst review even though legitimate changes are possible.
+
+---
+
+# Analyst Disposition — Sprint 23
+
+| Field | Value |
+|---|---|
+| Detection | DET-005 |
+| Technique | T1098.007 |
+| Domain | corp.lab |
+| Added Account | det005test |
+| Group | Domain Admins |
+| Actor | Authorized Lab Administrator |
+| Authorization | Authorized Security Simulation |
+| Disposition | Benign / Expected |
+| Escalation | Not Required |
+
+---
+
+# Current MITRE ATT&CK Coverage
+
+| Detection | Tactic | Technique | ATT&CK ID | Status |
+|---|---|---|---|---|
+| DET-001 | Discovery | Network Service Discovery | T1046 | Validated |
+| DET-002 | Credential Access | Brute Force | T1110 | Validated |
+| DET-003 | Execution | PowerShell | T1059.001 | Validated |
+| DET-004 | Persistence | Scheduled Task | T1053.005 | Validated |
+| DET-005 | Persistence / Privilege Escalation | Additional Local or Domain Groups | T1098.007 | Validated |
+
+---
+
+# ATT&CK Coverage Progression
+
+```text
+DISCOVERY
+   |
+   └── T1046
+       └── DET-001
+
+CREDENTIAL ACCESS
+   |
+   └── T1110
+       └── DET-002
+
+EXECUTION
+   |
+   └── T1059.001
+       └── DET-003
+
+PERSISTENCE
+   |
+   ├── T1053.005
+   |   └── DET-004
+   |
+   └── T1098.007
+       └── DET-005
+
+PRIVILEGE ESCALATION
+   |
+   └── T1098.007
+       └── DET-005
+```
+
+Sprint 23 therefore adds direct identity-based visibility into both **Persistence** and **Privilege Escalation**.
+
+---
+
+# Sprint 23 ATT&CK Result
+
+```text
+Technique:       T1098.007
+Detection:       DET-005
+Telemetry:       Windows Security 4728
+Positive Test:   PASS
+Negative Test:   PASS
+Alert:           OPERATIONAL
+Analyst Response: DOCUMENTED
+Status:          VALIDATED
+```
