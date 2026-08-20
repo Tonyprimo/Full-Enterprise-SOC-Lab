@@ -1,0 +1,1026 @@
+# Sprint 24 — Lateral Movement Detection Engineering
+
+**Status:** Complete 
+**Detection:** DET-006 — Remote Administrative SMB Logon 
+**MITRE ATT&CK:** T1021.002 — Remote Services: SMB/Windows Admin Shares 
+**Primary Data Source:** Windows Security Event Logs 
+**Primary Event:** Event ID 4624 — Successful Logon 
+**Supporting Events:** Event ID 5140 / 5145 where available 
+**SIEM:** Splunk Enterprise
+
+---
+
+# Objective
+
+Develop, validate, and operationalize a detection for remote administrative SMB access between Windows systems.
+
+Sprint 24 expanded the SOC lab into lateral-movement monitoring by detecting a privileged network logon from one domain workstation to another through SMB and an administrative share.
+
+The sprint focused on:
+
+- Validating workstation-to-workstation connectivity
+- Establishing a controlled SMB administrative session
+- Identifying Windows network-logon telemetry
+- Reviewing Event ID 4624 with Logon Type 3
+- Checking administrative-share telemetry
+- Developing DET-006
+- Performing positive and negative validation
+- Creating lateral-movement hunting queries
+- Operationalizing DET-006 as a scheduled Splunk alert
+- Mapping the behavior to MITRE ATT&CK T1021.002
+- Developing an analyst investigation workflow
+- Correlating lateral movement with earlier detections
+- Cleaning up the test session
+
+---
+
+# Environment
+
+| System | Role | IP Address |
+|---|---|---|
+| DC01 | Active Directory Domain Controller / DNS | `10.10.10.10` |
+| SIEM01 | Splunk Enterprise | `10.10.10.20` |
+| WIN11-01 | Source Workstation | `10.10.10.101` |
+| WIN11-02 | Target Workstation | `10.10.10.102` |
+
+Domain:
+
+```text
+corp.lab
+```
+
+Primary test flow:
+
+```text
+WIN11-01
+10.10.10.101
+     |
+     | SMB / TCP 445
+     | Privileged Domain Authentication
+     v
+WIN11-02
+10.10.10.102
+     |
+     | Windows Security Telemetry
+     v
+Splunk Universal Forwarder
+     |
+     v
+SIEM01
+     |
+     v
+Splunk Enterprise
+     |
+     v
+DET-006
+     |
+     v
+Scheduled Alert
+     |
+     v
+Analyst Triage
+```
+
+---
+
+# Environment Validation
+
+Both workstations were validated against the `corp.lab` domain.
+
+On WIN11-01:
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+Expected:
+
+```text
+True
+```
+
+On WIN11-02:
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+Expected:
+
+```text
+True
+```
+
+Name resolution from WIN11-01:
+
+```powershell
+Resolve-DnsName WIN11-02.corp.lab
+```
+
+Expected:
+
+```text
+10.10.10.102
+```
+
+SMB connectivity was validated using:
+
+```powershell
+Test-NetConnection 10.10.10.102 -Port 445
+```
+
+Expected:
+
+```text
+TcpTestSucceeded : True
+```
+
+This confirmed the network path required for the controlled lateral-movement simulation.
+
+---
+
+# Baseline Validation
+
+WIN11-02 was reviewed for active SMB sessions before generating test activity.
+
+```powershell
+Get-SmbSession
+```
+
+No Sprint 24 test session from WIN11-01 was expected at baseline.
+
+Recent successful Windows logons were also reviewed locally:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} -MaxEvents 20 | Select-Object TimeCreated,Id,Message
+```
+
+The sprint focused on:
+
+```text
+Event ID 4624
+Logon Type 3
+```
+
+representing a network logon.
+
+---
+
+# Controlled Remote Administrative Access
+
+Existing SMB sessions were cleared on WIN11-01:
+
+```cmd
+net use * /delete /y
+```
+
+A controlled connection was then established to the administrative C$ share on WIN11-02:
+
+```cmd
+net use \\10.10.10.102\C$ /user:CORP\tadmin *
+```
+
+The password was entered interactively rather than placing credentials directly on the command line.
+
+Expected:
+
+```text
+The command completed successfully.
+```
+
+The administrative share was accessed:
+
+```cmd
+dir \\10.10.10.102\C$
+```
+
+This generated the controlled activity:
+
+```text
+WIN11-01
+     |
+     | Domain Credentials
+     | SMB / TCP 445
+     v
+WIN11-02
+     |
+     v
+C$ Administrative Share
+```
+
+---
+
+# SMB Session Validation
+
+WIN11-02 was checked for the resulting SMB session:
+
+```powershell
+Get-SmbSession
+```
+
+The session provided evidence that WIN11-01 had established remote SMB access to WIN11-02.
+
+Expected source:
+
+```text
+WIN11-01
+10.10.10.101
+```
+
+This validated the endpoint-level connection before analyzing the SIEM telemetry.
+
+---
+
+# Windows Security Event Validation
+
+WIN11-02 was reviewed for the corresponding successful logon:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} -MaxEvents 20 | Select-Object TimeCreated,Id,Message
+```
+
+The relevant event contained:
+
+```text
+Event ID:
+4624
+
+Logon Type:
+3
+
+Account:
+tadmin
+
+Source:
+10.10.10.101
+```
+
+Conceptually:
+
+```text
+Remote Source
+WIN11-01
+      |
+      v
+Network Authentication
+Logon Type 3
+      |
+      v
+Target
+WIN11-02
+```
+
+---
+
+# Administrative Share Telemetry
+
+Supporting Windows share-access telemetry was checked using Event ID 5140:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=5140} -MaxEvents 20 | Select-Object TimeCreated,Id,Message
+```
+
+Event ID 5145 was also reviewed:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=5145} -MaxEvents 20 | Select-Object TimeCreated,Id,Message
+```
+
+Where available, this telemetry could provide additional context such as:
+
+```text
+C$
+ADMIN$
+Share access
+Source address
+Account
+```
+
+The primary DET-006 detection does not depend on these events if they are unavailable.
+
+Event ID 4624 with Logon Type 3 remains sufficient for the lab detection.
+
+---
+
+# Splunk Validation
+
+The target workstation's successful logon activity was located in Splunk:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 earliest=-30m
+```
+
+The controlled source IP was then used to isolate the event:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 "10.10.10.101" earliest=-30m
+```
+
+The privileged account was added:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 "10.10.10.101" "tadmin" earliest=-30m
+```
+
+The event was reviewed to validate the actual Splunk representation of:
+
+```text
+Source IP
+Source Workstation
+Target User
+Logon Type
+Authentication Package
+Target Host
+```
+
+As in prior sprints, field names were validated against the actual indexed telemetry rather than assumed.
+
+---
+
+# DET-006 Development
+
+Created:
+
+```text
+DET-006 — Remote Administrative SMB Logon
+```
+
+Objective:
+
+> Detect privileged Windows network authentication associated with remote SMB administrative access between endpoints.
+
+Initial lab detection:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 "10.10.10.101" "tadmin"
+```
+
+Where a validated `LogonType` field is available:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 LogonType=3
+| search TargetUserName="tadmin"
+```
+
+Portfolio output:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 LogonType=3
+| search TargetUserName="tadmin"
+| eval detection="DET-006 - Remote Administrative SMB Logon"
+| table _time detection host TargetUserName IpAddress WorkstationName
+```
+
+Field names should be adjusted to match the actual Splunk event schema.
+
+---
+
+# Detection Logic
+
+```text
+Successful Windows Logon
+          |
+          v
+      Event 4624
+          |
+          v
+     Logon Type 3?
+      /       \
+     NO       YES
+     |         |
+     v         v
+Ignore    Privileged User?
+             /      \
+            NO      YES
+            |        |
+            v        v
+         Review    DET-006
+                     |
+                     v
+                Analyst Triage
+```
+
+The detection is focused on remote network authentication using a privileged account.
+
+---
+
+# Positive Validation
+
+A fresh SMB administrative session was established from WIN11-01 to WIN11-02.
+
+```cmd
+net use * /delete /y
+```
+
+```cmd
+net use \\10.10.10.102\C$ /user:CORP\tadmin *
+```
+
+```cmd
+dir \\10.10.10.102\C$
+```
+
+The resulting network-logon telemetry was ingested into Splunk.
+
+DET-006 was executed against the relevant time window.
+
+Result:
+
+```text
+DET-006 TRIGGERED
+```
+
+**Positive Validation:** PASS
+
+---
+
+# Negative Validation
+
+The test SMB session was removed:
+
+```cmd
+net use \\10.10.10.102\C$ /delete
+```
+
+Normal local authentication activity was then generated on WIN11-02 without establishing remote administrative SMB access.
+
+DET-006 was evaluated against the isolated negative-test window.
+
+Result:
+
+```text
+DET-006 NOT TRIGGERED
+```
+
+**Negative Validation:** PASS
+
+This demonstrated that successful Windows authentication alone did not automatically satisfy the remote administrative logon detection.
+
+---
+
+# Validation Matrix
+
+| Test | Activity | Expected | Result |
+|---|---|---|---|
+| Baseline | No remote SMB session | No DET-006 | PASS |
+| Positive | WIN11-01 → WIN11-02 C$ | DET-006 | PASS |
+| Negative | Local/normal authentication | No DET-006 | PASS |
+| Telemetry | Event 4624 / Logon Type 3 | Searchable | PASS |
+| Alert | Fresh SMB admin session | Trigger | PASS |
+
+---
+
+# Threat Hunting
+
+A broader network-logon hunt was created where the `LogonType` field was available:
+
+```spl
+index=* EventCode=4624 LogonType=3
+```
+
+Saved as:
+
+```text
+HUNT - Windows Network Logons
+```
+
+Administrative-share activity could also be hunted using:
+
+```spl
+index=* (EventCode=5140 OR EventCode=5145)
+("C$" OR "ADMIN$")
+```
+
+Saved as:
+
+```text
+HUNT - Administrative Share Access
+```
+
+These queries provide broader analyst visibility than DET-006.
+
+---
+
+# Detection vs. Hunting
+
+```text
+DET-006
+   |
+   v
+Privileged Network Logon
+   |
+   v
+Remote Administrative SMB
+   |
+   v
+Alert
+```
+
+versus:
+
+```text
+HUNT
+   |
+   +---- All Network Logons
+   |
+   +---- Administrative Share Access
+   |
+   v
+Analyst Review
+```
+
+---
+
+# Scheduled Alert
+
+DET-006 was operationalized as a scheduled Splunk alert.
+
+```text
+Alert Name:
+DET-006 - Remote Administrative SMB Logon
+
+Type:
+Scheduled
+
+Schedule:
+Every 5 minutes
+
+Search Window:
+Last 10 minutes
+
+Trigger:
+Number of Results > 0
+
+Severity:
+High
+```
+
+A fresh SMB administrative session was created for alert validation.
+
+The scheduled alert successfully triggered.
+
+**Scheduled Alert Validation:** PASS
+
+---
+
+# MITRE ATT&CK Mapping
+
+DET-006 maps primarily to:
+
+```text
+Tactic:
+Lateral Movement
+
+Technique:
+Remote Services
+
+Sub-technique:
+SMB/Windows Admin Shares
+
+Technique ID:
+T1021.002
+```
+
+Detection relationship:
+
+```text
+Remote Windows Host
+       |
+       v
+SMB Authentication
+       |
+       v
+Administrative Share
+       |
+       v
+Remote Administrative Access
+       |
+       v
+DET-006
+       |
+       v
+T1021.002
+```
+
+---
+
+# Analyst Investigation Workflow
+
+```text
+DET-006 Triggered
+        |
+        v
+Identify Source Host
+        |
+        v
+Identify Target Host
+        |
+        v
+Identify Account
+        |
+        v
+Review Logon Type
+        |
+        v
+Review Share Access
+        |
+        v
+Determine Account Privilege
+        |
+        v
+Review Authentication History
+        |
+        v
+Review Target Endpoint Activity
+        |
+        v
+Correlate Existing Detections
+        |
+        v
+Determine Authorization
+        |
+        +----------------------+
+        |                      |
+        v                      v
+    Authorized             Suspicious
+        |                      |
+        v                      v
+ Document / Close       Investigate / Escalate
+```
+
+---
+
+# Source Host Analysis
+
+Sprint 24 source:
+
+```text
+WIN11-01
+10.10.10.101
+```
+
+Questions:
+
+- Is peer-to-peer administration expected?
+- Is the source an approved administrative workstation?
+- Does the account normally authenticate from this host?
+- Has the source generated other security alerts?
+- Was the source recently involved in credential failures?
+
+---
+
+# Target Host Analysis
+
+Sprint 24 target:
+
+```text
+WIN11-02
+10.10.10.102
+```
+
+Review:
+
+- Asset role
+- Sensitivity
+- Logged-on users
+- Recent endpoint detections
+- New processes
+- Scheduled tasks
+- Network connections
+- Account changes
+
+---
+
+# Account Analysis
+
+Test account:
+
+```text
+CORP\tadmin
+```
+
+Questions:
+
+- Is the account privileged?
+- Is the account expected to access WIN11-02?
+- Where else has it authenticated?
+- Were there preceding failed logons?
+- Is the source location expected?
+- Is the account being used interactively or remotely?
+
+---
+
+# DET-002 Correlation
+
+Authentication history can be reviewed using:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625) "tadmin"
+```
+
+Potential sequence:
+
+```text
+Repeated Failed Authentication
+        |
+        v
+Successful Network Logon
+        |
+        v
+Remote Administrative Access
+```
+
+This provides correlation between:
+
+```text
+DET-002
+Repeated Failed Authentication
+```
+
+and:
+
+```text
+DET-006
+Remote Administrative SMB Logon
+```
+
+---
+
+# DET-003 Correlation
+
+Endpoint execution on the target can be reviewed around the remote logon.
+
+Potential sequence:
+
+```text
+Remote Administrative Logon
+        |
+        v
+Encoded PowerShell
+```
+
+This would correlate DET-006 with:
+
+```text
+DET-003
+Encoded PowerShell Execution
+```
+
+and significantly increase investigative priority.
+
+---
+
+# DET-004 Correlation
+
+A scheduled task created after remote access could indicate persistence.
+
+```text
+Remote Administrative Logon
+        |
+        v
+Scheduled Task Creation
+```
+
+Correlation:
+
+```text
+DET-006
+        +
+DET-004
+```
+
+---
+
+# DET-005 Correlation
+
+Privileged group changes after remote access could indicate account manipulation.
+
+```text
+Remote Administrative Logon
+        |
+        v
+Privileged Group Membership Change
+```
+
+Correlation:
+
+```text
+DET-006
+        +
+DET-005
+```
+
+---
+
+# Multi-Stage Correlation
+
+The lab can now represent a more complete sequence:
+
+```text
+DET-002
+Repeated Failed Authentication
+        |
+        v
+DET-006
+Remote Administrative SMB Logon
+        |
+        v
+DET-003
+Encoded PowerShell
+        |
+        v
+DET-004
+Scheduled Task Creation
+        |
+        v
+DET-005
+Privileged Group Change
+        |
+        v
+Potential Multi-Stage Incident
+```
+
+This creates a foundation for future correlation and incident-response sprints.
+
+---
+
+# False Positive Considerations
+
+Legitimate SMB administrative access can include:
+
+- IT administration
+- Helpdesk support
+- File administration
+- Software deployment
+- Backup systems
+- Endpoint management
+- Remote maintenance
+- Security testing
+
+Therefore:
+
+```text
+Administrative SMB Access
+        !=
+Confirmed Lateral Movement
+```
+
+Context determines severity.
+
+---
+
+# Detection Tuning
+
+Future DET-006 tuning can incorporate:
+
+```text
+Network Logon
+      +
+Privileged Account
+      +
+Administrative Share
+      +
+Unexpected Source
+      +
+Target Sensitivity
+      +
+Related Endpoint Detection
+      |
+      v
+Risk Score
+```
+
+Potential high-confidence correlations include:
+
+```text
+Failed Authentication
+      +
+Successful Network Logon
+      +
+Administrative Share
+```
+
+or:
+
+```text
+SMB Admin Access
+      +
+PowerShell
+      +
+Scheduled Task
+```
+
+---
+
+# Cleanup
+
+The test SMB connection was removed:
+
+```cmd
+net use \\10.10.10.102\C$ /delete
+```
+
+Connections were verified using:
+
+```cmd
+net use
+```
+
+No persistent configuration was created by the Sprint 24 simulation.
+
+---
+
+# Skills Demonstrated
+
+- Windows SMB administration
+- Windows Security Event 4624 analysis
+- Network Logon Type 3 analysis
+- Administrative-share monitoring
+- Splunk Enterprise
+- SPL development
+- Lateral-movement detection
+- Remote-services analysis
+- Detection engineering
+- Positive detection validation
+- Negative detection validation
+- Scheduled SIEM alerting
+- Threat hunting
+- Authentication correlation
+- Endpoint correlation
+- MITRE ATT&CK mapping
+- SOC analyst triage
+- False-positive analysis
+- Detection tuning
+- Multi-stage detection correlation
+- Technical documentation
+
+---
+
+# Evidence
+
+Store Sprint 24 evidence under:
+
+```text
+screenshots/sprint-24/
+```
+
+Recommended:
+
+```text
+01-smb-session-validation.png
+02-det006-positive-test.png
+03-det006-negative-test.png
+04-det006-triggered-alert.png
+05-administrative-share-event.png
+```
+
+Only screenshots actually captured during the sprint should be committed.
+
+---
+
+# Sprint Result
+
+**Sprint 24 Status: COMPLETE**
+
+Sprint 24 expanded the SOC lab into lateral-movement detection by developing and validating DET-006.
+
+Final workflow:
+
+```text
+WIN11-01
+    |
+    | SMB Administrative Access
+    v
+WIN11-02
+    |
+    | Network Logon Telemetry
+    v
+Splunk
+    |
+    v
+DET-006
+    |
+    v
+High-Severity Alert
+    |
+    v
+Analyst Investigation
+    |
+    +---- Authorized ----> Document / Close
+    |
+    +---- Suspicious ----> Investigate / Escalate
+```
+
+Sprint 24 also established stronger cross-detection correlation across:
+
+```text
+Credential Access
+      |
+Lateral Movement
+      |
+Execution
+      |
+Persistence
+      |
+Privilege Escalation
+```
