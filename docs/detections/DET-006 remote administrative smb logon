@@ -1,0 +1,769 @@
+# DET-006 — Remote Administrative SMB Logon
+
+## Detection Metadata
+
+| Field | Value |
+|---|---|
+| Detection ID | DET-006 |
+| Detection Name | Remote Administrative SMB Logon |
+| Category | Lateral Movement |
+| Severity | High |
+| Status | Validated |
+| SIEM | Splunk Enterprise |
+| Primary Data Source | Windows Security |
+| Primary Event | Event ID 4624 |
+| Primary Logon Type | 3 — Network |
+| Supporting Events | 5140 / 5145 |
+| Detection Type | Authentication / Behavioral |
+| MITRE ATT&CK | T1021.002 — SMB/Windows Admin Shares |
+| ATT&CK Tactic | Lateral Movement |
+
+---
+
+# Objective
+
+Detect privileged remote network authentication associated with SMB administrative access between Windows systems.
+
+DET-006 focuses on the behavioral combination:
+
+```text
+Remote Source
+      +
+Successful Network Logon
+      +
+Privileged Account
+      +
+SMB Administrative Access
+```
+
+The detection does not assume that all SMB administration is malicious.
+
+It provides a high-priority lateral-movement investigation signal.
+
+---
+
+# Data Requirements
+
+Primary telemetry:
+
+```text
+Windows Security Event ID 4624
+```
+
+Required behavior:
+
+```text
+Logon Type 3
+```
+
+Useful fields include:
+
+```text
+TargetUserName
+IpAddress
+WorkstationName
+LogonType
+AuthenticationPackageName
+host
+_time
+```
+
+Supporting telemetry may include:
+
+```text
+Event ID 5140
+A network share was accessed
+
+Event ID 5145
+Detailed share access
+```
+
+Data pipeline:
+
+```text
+Remote SMB Access
+      |
+      v
+WIN11-02 Security Log
+      |
+      v
+Event 4624 / Type 3
+      |
+      v
+Splunk Universal Forwarder
+      |
+      v
+Splunk Enterprise
+      |
+      v
+DET-006
+```
+
+---
+
+# Detection Logic
+
+Lab-specific detection:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 "10.10.10.101" "tadmin"
+```
+
+Preferred field-based detection where fields are validated:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 LogonType=3
+| search TargetUserName="tadmin"
+```
+
+Portfolio output:
+
+```spl
+index=* host="WIN11-02" EventCode=4624 LogonType=3
+| search TargetUserName="tadmin"
+| eval detection="DET-006 - Remote Administrative SMB Logon"
+| table _time detection host TargetUserName IpAddress WorkstationName
+```
+
+---
+
+# Detection Logic Explained
+
+```text
+Successful Authentication
+        |
+        v
+    Event 4624
+        |
+        v
+   Logon Type 3?
+    /       \
+   NO       YES
+   |         |
+   v         v
+Ignore   Privileged Account?
+             /      \
+            NO      YES
+            |        |
+            v        v
+          Review   DET-006
+```
+
+---
+
+# Controlled Validation
+
+Source:
+
+```text
+WIN11-01
+10.10.10.101
+```
+
+Target:
+
+```text
+WIN11-02
+10.10.10.102
+```
+
+Account:
+
+```text
+CORP\tadmin
+```
+
+Connection:
+
+```cmd
+net use \\10.10.10.102\C$ /user:CORP\tadmin *
+```
+
+Administrative-share access:
+
+```cmd
+dir \\10.10.10.102\C$
+```
+
+This safely generated the remote administrative authentication behavior required by DET-006.
+
+---
+
+# Positive Validation
+
+A fresh SMB connection was established from WIN11-01 to WIN11-02.
+
+The resulting Windows Security Event 4624 was identified with:
+
+```text
+Logon Type 3
+Source: 10.10.10.101
+Account: tadmin
+Target: WIN11-02
+```
+
+DET-006 identified the event.
+
+Result:
+
+```text
+DET-006 TRIGGERED
+```
+
+**Positive Test:** PASS
+
+---
+
+# Negative Validation
+
+A local successful authentication event was generated without remote SMB access.
+
+Because it was not the validated privileged network-logon pattern, DET-006 did not trigger.
+
+Result:
+
+```text
+DET-006 NOT TRIGGERED
+```
+
+**Negative Test:** PASS
+
+---
+
+# Validation Matrix
+
+| Test | Behavior | Expected | Result |
+|---|---|---|---|
+| Positive | Privileged SMB network logon | Trigger | PASS |
+| Negative | Normal/local successful logon | No Trigger | PASS |
+| Telemetry | 4624 / Logon Type 3 | Searchable | PASS |
+| SMB Session | WIN11-01 → WIN11-02 | Established | PASS |
+| Scheduled Alert | Fresh SMB test | Trigger | PASS |
+
+---
+
+# Scheduled Alert
+
+```text
+Name:
+DET-006 - Remote Administrative SMB Logon
+
+Type:
+Scheduled
+
+Frequency:
+Every 5 minutes
+
+Search Window:
+Last 10 minutes
+
+Trigger:
+Results > 0
+
+Severity:
+High
+```
+
+Operational flow:
+
+```text
+Remote SMB Authentication
+        |
+        v
+Event 4624 / Type 3
+        |
+        v
+Splunk
+        |
+        v
+DET-006
+        |
+        v
+High-Severity Alert
+        |
+        v
+Analyst Investigation
+```
+
+---
+
+# MITRE ATT&CK Mapping
+
+| Field | Value |
+|---|---|
+| Tactic | Lateral Movement |
+| Technique | Remote Services |
+| Sub-technique | SMB/Windows Admin Shares |
+| Technique ID | T1021.002 |
+| Detection | DET-006 |
+| Primary Telemetry | Windows Security 4624 |
+
+Relationship:
+
+```text
+Remote Authentication
+        |
+        v
+SMB
+        |
+        v
+Administrative Share
+        |
+        v
+Remote Services
+        |
+        v
+T1021.002
+```
+
+---
+
+# Analyst Triage
+
+When DET-006 triggers:
+
+```text
+DET-006
+   |
+   v
+Identify Source
+   |
+   v
+Identify Target
+   |
+   v
+Identify Account
+   |
+   v
+Review Logon Type
+   |
+   v
+Review Administrative Share
+   |
+   v
+Review Authentication History
+   |
+   v
+Review Target Activity
+   |
+   v
+Correlate Other Detections
+   |
+   v
+Determine Authorization
+```
+
+Questions:
+
+1. Which system initiated the connection?
+2. Which endpoint was accessed?
+3. Which account authenticated?
+4. Is the account privileged?
+5. Was Logon Type 3 observed?
+6. Was C$ or ADMIN$ accessed?
+7. Is this source authorized for remote administration?
+8. Were failed logons observed beforehand?
+9. Was PowerShell executed afterward?
+10. Was persistence established afterward?
+11. Were privileges changed afterward?
+12. Is this consistent with normal administration?
+
+---
+
+# Source Analysis
+
+Review:
+
+```text
+Source IP
+Source workstation
+User
+```
+
+Sprint 24:
+
+```text
+WIN11-01
+10.10.10.101
+```
+
+Questions:
+
+- Is this an approved management endpoint?
+- Does this workstation normally perform administration?
+- Does the source have other recent alerts?
+
+---
+
+# Target Analysis
+
+Sprint 24:
+
+```text
+WIN11-02
+10.10.10.102
+```
+
+Review:
+
+- Asset criticality
+- User sessions
+- Process creation
+- PowerShell
+- Scheduled tasks
+- Network connections
+- Security changes
+
+---
+
+# Account Analysis
+
+Sprint 24 account:
+
+```text
+CORP\tadmin
+```
+
+Review:
+
+- Privilege level
+- Expected source systems
+- Recent failed logons
+- Recent successful logons
+- Other targets accessed
+- Recent account changes
+
+---
+
+# Supporting Share Telemetry
+
+Where available:
+
+```spl
+index=* (EventCode=5140 OR EventCode=5145)
+("C$" OR "ADMIN$")
+```
+
+Administrative-share events can provide stronger context for the network authentication.
+
+Correlation:
+
+```text
+Event 4624 / Type 3
+       +
+5140 / 5145
+       |
+       v
+Stronger SMB Admin Context
+```
+
+---
+
+# DET-002 Correlation
+
+Potential sequence:
+
+```text
+DET-002
+Repeated Failed Authentication
+        |
+        v
+DET-006
+Remote Administrative SMB Logon
+```
+
+This may represent credential attempts followed by successful remote use.
+
+---
+
+# DET-003 Correlation
+
+Potential sequence:
+
+```text
+DET-006
+Remote Administrative SMB Logon
+        |
+        v
+DET-003
+Encoded PowerShell Execution
+```
+
+Remote authentication followed by suspicious execution increases investigative significance.
+
+---
+
+# DET-004 Correlation
+
+Potential sequence:
+
+```text
+DET-006
+Remote Administrative SMB Logon
+        |
+        v
+DET-004
+Scheduled Task Creation
+```
+
+This can provide lateral-movement-to-persistence context.
+
+---
+
+# DET-005 Correlation
+
+Potential sequence:
+
+```text
+DET-006
+Remote Administrative SMB Logon
+        |
+        v
+DET-005
+Privileged Group Membership Change
+```
+
+This can indicate lateral movement followed by account manipulation.
+
+---
+
+# Multi-Stage Correlation
+
+```text
+Credential Attempts
+      |
+      v
+Remote SMB Logon
+      |
+      v
+PowerShell
+      |
+      v
+Scheduled Task
+      |
+      v
+Privilege Change
+```
+
+Mapped detections:
+
+```text
+DET-002
+   ↓
+DET-006
+   ↓
+DET-003
+   ↓
+DET-004
+   ↓
+DET-005
+```
+
+This sequence provides a strong foundation for incident-response exercises.
+
+---
+
+# Threat Hunting
+
+Network logon hunt:
+
+```spl
+index=* EventCode=4624 LogonType=3
+```
+
+Administrative-share hunt:
+
+```spl
+index=* (EventCode=5140 OR EventCode=5145)
+("C$" OR "ADMIN$")
+```
+
+---
+
+# Detection vs. Hunting
+
+```text
+DET-006
+Privileged network logon
+        |
+        v
+Alert
+```
+
+versus:
+
+```text
+HUNT
+All network logons
++
+All admin-share access
+        |
+        v
+Analyst Review
+```
+
+---
+
+# False Positives
+
+Legitimate reasons include:
+
+- Helpdesk administration
+- IT maintenance
+- Remote software deployment
+- Backup systems
+- File administration
+- Endpoint management
+- Administrative scripts
+- Security testing
+
+Therefore:
+
+```text
+SMB Administrative Access
+        !=
+Confirmed Lateral Movement
+```
+
+---
+
+# Tuning Recommendations
+
+Future tuning can consider:
+
+```text
+Network Logon Type 3
+       +
+Privileged Account
+       +
+Admin Share
+       +
+Unexpected Source
+       +
+Sensitive Target
+       +
+Related Endpoint Alert
+       |
+       v
+Risk Score
+```
+
+Possible severity modifiers:
+
+- Source not in approved admin workstation list
+- Target is sensitive
+- Account is highly privileged
+- Access occurs outside normal change window
+- Failed logons precede success
+- PowerShell follows access
+- Persistence follows access
+
+---
+
+# Detection Limitations
+
+DET-006 currently:
+
+- Focuses on SMB administrative access
+- Depends primarily on Event 4624
+- Uses lab-specific account and source context
+- Does not detect every lateral-movement technique
+- Does not independently prove malicious intent
+- May identify legitimate administrative activity
+- Requires analyst correlation
+
+Future versions can incorporate broader host baselines and richer share telemetry.
+
+---
+
+# Analyst Disposition Example
+
+| Field | Value |
+|---|---|
+| Detection | DET-006 |
+| Source | WIN11-01 (`10.10.10.101`) |
+| Target | WIN11-02 (`10.10.10.102`) |
+| Account | CORP\tadmin |
+| Access | C$ Administrative Share |
+| ATT&CK | T1021.002 |
+| Authorization | Authorized Security Simulation |
+| Disposition | Benign / Expected |
+| Escalation | Not Required |
+
+---
+
+# Detection Engineering Lifecycle
+
+```text
+Identify Lateral Behavior
+        |
+        v
+Generate Controlled SMB Access
+        |
+        v
+Validate Network Logon
+        |
+        v
+Analyze Event 4624
+        |
+        v
+Develop DET-006
+        |
+        v
+Positive Test
+        |
+        v
+Negative Test
+        |
+        v
+Operationalize Alert
+        |
+        v
+MITRE Mapping
+        |
+        v
+Correlate Other Detections
+        |
+        v
+Analyst Response
+```
+
+---
+
+# Evidence
+
+```text
+screenshots/sprint-24/
+```
+
+Recommended:
+
+```text
+01-smb-session-validation.png
+02-det006-positive-test.png
+03-det006-negative-test.png
+04-det006-triggered-alert.png
+05-administrative-share-event.png
+```
+
+---
+
+# Detection Status
+
+```text
+DET-006
+Remote Administrative SMB Logon
+
+Development:          COMPLETE
+Telemetry Validation: PASS
+Positive Test:        PASS
+Negative Test:        PASS
+Scheduled Alert:      OPERATIONAL
+Threat Hunt:          CREATED
+MITRE Mapping:        COMPLETE
+Correlation:          DOCUMENTED
+Analyst Workflow:     DOCUMENTED
+Cleanup:              COMPLETE
+
+STATUS: VALIDATED
+```
