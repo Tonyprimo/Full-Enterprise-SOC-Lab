@@ -1,0 +1,988 @@
+# Sprint 23 — Privileged Group Membership Detection Engineering
+
+**Status:** Complete 
+**Detection:** DET-005 — Privileged Domain Group Membership Change 
+**MITRE ATT&CK:** T1098.007 — Account Manipulation: Additional Local or Domain Groups 
+**Primary Data Source:** Windows Security Event Logs 
+**Primary Event:** Event ID 4728 — Member Added to a Security-Enabled Global Group 
+**SIEM:** Splunk Enterprise
+
+---
+
+# Objective
+
+Develop, validate, and operationalize a detection for additions to privileged Active Directory security groups.
+
+Sprint 23 expanded the SOC lab into identity-based privilege escalation and account manipulation monitoring.
+
+The primary controlled behavior was:
+
+```text
+Standard Domain Account
+        |
+        v
+Added to Domain Admins
+        |
+        v
+Windows Security Event 4728
+        |
+        v
+Splunk Enterprise
+        |
+        v
+DET-005
+        |
+        v
+High-Severity Alert
+```
+
+The sprint focused on:
+
+- Validating DC01 security telemetry
+- Creating a dedicated test account
+- Establishing a privileged-group membership baseline
+- Generating controlled Domain Admin membership changes
+- Analyzing Windows Event ID 4728
+- Developing DET-005
+- Performing positive and negative validation
+- Creating a privileged-group hunting query
+- Operationalizing DET-005 as a Splunk alert
+- Mapping activity to MITRE ATT&CK T1098.007
+- Developing an analyst investigation workflow
+- Correlating identity activity with existing detections
+- Cleaning up all temporary privileged access
+
+---
+
+# Environment
+
+| System | Role | IP Address |
+|---|---|---|
+| DC01 | Active Directory Domain Controller / DNS | `10.10.10.10` |
+| SIEM01 | Splunk Enterprise | `10.10.10.20` |
+| WIN11-02 | Domain Workstation | CORP-LAN |
+
+Domain:
+
+```text
+corp.lab
+```
+
+Primary telemetry source:
+
+```text
+DC01
+ |
+ v
+Windows Security Log
+ |
+ v
+Event ID 4728
+ |
+ v
+Splunk Universal Forwarder
+ |
+ v
+SIEM01
+ |
+ v
+Splunk Enterprise
+```
+
+---
+
+# Environment Validation
+
+Domain connectivity was validated from WIN11-02.
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+Expected:
+
+```text
+True
+```
+
+DNS resolution:
+
+```powershell
+Resolve-DnsName dc01.corp.lab
+```
+
+Expected:
+
+```text
+10.10.10.10
+```
+
+Splunk receiver connectivity:
+
+```powershell
+Test-NetConnection 10.10.10.20 -Port 9997
+```
+
+Expected:
+
+```text
+TcpTestSucceeded : True
+```
+
+DC01 telemetry was confirmed in Splunk:
+
+```spl
+index=* host="DC01" earliest=-15m
+```
+
+---
+
+# Security Group Auditing Validation
+
+Windows Security Event ID 4728 was used as the primary telemetry source.
+
+Event 4728 represents:
+
+```text
+A member was added to a security-enabled global group.
+```
+
+Existing telemetry was reviewed using:
+
+```spl
+index=* EventCode=4728 earliest=-24h
+```
+
+Local DC01 telemetry could also be validated using:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4728} -MaxEvents 10 | Select-Object TimeCreated,Id,Message
+```
+
+This established visibility into Active Directory group membership changes.
+
+---
+
+# Test Account Creation
+
+A dedicated account was created for DET-005 validation.
+
+```text
+Username:
+det005test
+
+Domain:
+CORP
+
+Account:
+CORP\det005test
+```
+
+The dedicated test account prevented the simulation from modifying the privileges of a normal lab account.
+
+---
+
+# Baseline Validation
+
+Before generating the detection event, the account's existing group membership was reviewed.
+
+```powershell
+Get-ADUser det005test -Properties MemberOf | Select-Object -ExpandProperty MemberOf
+```
+
+The account was confirmed not to be a member of:
+
+```text
+Domain Admins
+```
+
+Baseline:
+
+```text
+det005test
+    |
+    v
+Standard Domain Account
+    |
+    X
+Domain Admins
+```
+
+This established the pre-test security state.
+
+---
+
+# Controlled Privileged Group Addition
+
+The dedicated account was added to Domain Admins.
+
+```powershell
+Add-ADGroupMember -Identity "Domain Admins" -Members det005test
+```
+
+Membership was confirmed:
+
+```powershell
+Get-ADGroupMember "Domain Admins" | Where-Object {$_.SamAccountName -eq "det005test"}
+```
+
+Expected:
+
+```text
+det005test
+```
+
+This represented the controlled privilege-change activity used to develop DET-005.
+
+---
+
+# Event Validation
+
+DC01 was checked locally for Event ID 4728:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4728} -MaxEvents 5 | Select-Object TimeCreated,Id,Message
+```
+
+The relevant event contained information identifying:
+
+```text
+Privileged Group:
+Domain Admins
+
+Added Account:
+det005test
+
+Actor:
+Administrative account performing the change
+```
+
+Splunk search:
+
+```spl
+index=* EventCode=4728 earliest=-15m
+```
+
+Additional searches:
+
+```spl
+index=* EventCode=4728 "Domain Admins" earliest=-15m
+```
+
+```spl
+index=* EventCode=4728 "det005test" earliest=-15m
+```
+
+The controlled membership change was successfully located in the SIEM.
+
+---
+
+# Event Anatomy
+
+The 4728 event provides multiple important identities.
+
+Conceptually:
+
+```text
+SUBJECT
+Account performing change
+        |
+        v
+GROUP
+Domain Admins
+        |
+        v
+MEMBER
+Account receiving membership
+```
+
+For the Sprint 23 simulation:
+
+```text
+Authorized Administrator
+        |
+        | adds
+        v
+det005test
+        |
+        | to
+        v
+Domain Admins
+```
+
+This distinction is important during analyst triage.
+
+The actor and the account receiving privilege are not necessarily the same account.
+
+---
+
+# DET-005 Development
+
+Created:
+
+```text
+DET-005 — Privileged Domain Group Membership Change
+```
+
+Objective:
+
+> Detect additions to high-privilege Active Directory security groups that require immediate security review.
+
+Initial detection:
+
+```spl
+index=* EventCode=4728 "Domain Admins"
+```
+
+Expanded detection:
+
+```spl
+index=* EventCode=4728
+("Domain Admins" OR "Enterprise Admins" OR "Schema Admins")
+```
+
+Portfolio output:
+
+```spl
+index=* EventCode=4728
+("Domain Admins" OR "Enterprise Admins" OR "Schema Admins")
+| eval detection="DET-005 - Privileged Domain Group Membership Change"
+| table _time detection host _raw
+```
+
+Additional fields can be added after confirming the exact field names exposed by the lab's Splunk environment.
+
+---
+
+# Detection Logic
+
+```text
+Security Group Membership Change
+              |
+              v
+        Event ID 4728
+              |
+              v
+     Identify Target Group
+              |
+       +------+------+
+       |             |
+       v             v
+ Non-Privileged   Privileged
+     Group          Group
+       |             |
+       v             v
+ No DET-005       DET-005
+                     |
+                     v
+               High Severity
+                     |
+                     v
+              Analyst Review
+```
+
+---
+
+# Privileged Groups
+
+Initial coverage includes:
+
+```text
+Domain Admins
+Enterprise Admins
+Schema Admins
+```
+
+The lab's positive validation uses:
+
+```text
+Domain Admins
+```
+
+Additional privileged groups could be incorporated as the detection matures.
+
+---
+
+# Positive Validation
+
+The test account was first removed from Domain Admins:
+
+```powershell
+Remove-ADGroupMember -Identity "Domain Admins" -Members det005test -Confirm:$false
+```
+
+Removal was verified:
+
+```powershell
+Get-ADGroupMember "Domain Admins" | Where-Object {$_.SamAccountName -eq "det005test"}
+```
+
+Expected:
+
+```text
+No output
+```
+
+A fresh positive event was then generated:
+
+```powershell
+Add-ADGroupMember -Identity "Domain Admins" -Members det005test
+```
+
+DET-005 was executed:
+
+```spl
+index=* EventCode=4728 "Domain Admins" earliest=-10m
+```
+
+Result:
+
+```text
+DET-005 TRIGGERED
+```
+
+**Positive Validation:** PASS
+
+---
+
+# Negative Validation
+
+A normal global security group was created:
+
+```powershell
+New-ADGroup -Name "DET005-NormalGroup" -GroupScope Global -GroupCategory Security
+```
+
+The test account was added:
+
+```powershell
+Add-ADGroupMember -Identity "DET005-NormalGroup" -Members det005test
+```
+
+This generated group-management telemetry without adding the account to a privileged group.
+
+The event could be located using:
+
+```spl
+index=* EventCode=4728 "DET005-NormalGroup" earliest=-10m
+```
+
+DET-005 was then evaluated against the isolated negative-test window:
+
+```spl
+index=* EventCode=4728
+("Domain Admins" OR "Enterprise Admins" OR "Schema Admins")
+earliest=-10m
+```
+
+Result:
+
+```text
+DET-005 NOT TRIGGERED
+```
+
+**Negative Validation:** PASS
+
+---
+
+# Validation Matrix
+
+| Test | Activity | Expected | Result |
+|---|---|---|---|
+| Baseline | Standard account | No Alert | PASS |
+| Positive | Added to Domain Admins | DET-005 | PASS |
+| Negative | Added to normal group | No DET-005 | PASS |
+| Telemetry | Event ID 4728 | Searchable | PASS |
+| Alert | Fresh Domain Admin addition | Trigger | PASS |
+
+---
+
+# Scheduled Alert
+
+DET-005 was operationalized as a scheduled Splunk alert.
+
+```text
+Name:
+DET-005 - Privileged Domain Group Membership Change
+
+Alert Type:
+Scheduled
+
+Frequency:
+Every 5 minutes
+
+Search Window:
+Last 10 minutes
+
+Trigger:
+Number of Results > 0
+
+Severity:
+High
+```
+
+A fresh Domain Admin membership change was generated to validate the alert.
+
+```powershell
+Add-ADGroupMember -Identity "Domain Admins" -Members det005test
+```
+
+The scheduled alert successfully triggered.
+
+**Alert Validation:** PASS
+
+---
+
+# Severity
+
+DET-005 was assigned:
+
+```text
+HIGH
+```
+
+Unlike many lower-confidence behavioral detections, privileged domain-group membership changes can immediately alter an account's effective access.
+
+However:
+
+```text
+High Severity
+      !=
+Confirmed Compromise
+```
+
+Legitimate administrative changes still require validation.
+
+---
+
+# MITRE ATT&CK Mapping
+
+DET-005 maps to:
+
+```text
+Tactics:
+Persistence
+Privilege Escalation
+
+Technique:
+Account Manipulation
+
+Sub-technique:
+Additional Local or Domain Groups
+
+Technique ID:
+T1098.007
+```
+
+Detection relationship:
+
+```text
+Account
+   |
+   v
+Added to Privileged Group
+   |
+   v
+Privilege Changed
+   |
+   v
+DET-005
+   |
+   v
+T1098.007
+```
+
+---
+
+# Analyst Investigation Workflow
+
+```text
+DET-005 Triggered
+        |
+        v
+Identify Privileged Group
+        |
+        v
+Identify Added Account
+        |
+        v
+Identify Actor
+        |
+        v
+Validate Change Authorization
+        |
+        v
+Review Account History
+        |
+        v
+Review Authentication Activity
+        |
+        v
+Review Related Endpoint Activity
+        |
+        v
+Correlate Existing Detections
+        |
+        v
+Determine Disposition
+        |
+        +-----------------------+
+        |                       |
+        v                       v
+    Authorized              Unauthorized
+        |                       |
+        v                       v
+ Document / Close       Contain / Escalate
+```
+
+---
+
+# Added Account Investigation
+
+The analyst should determine:
+
+- Which account received privileged membership?
+- When was the account created?
+- Is the account enabled?
+- Is it normally privileged?
+- What other groups is it in?
+- Has the account authenticated recently?
+- Were there failed authentication attempts?
+- Which systems has it accessed?
+
+Example:
+
+```powershell
+Get-ADUser det005test -Properties *
+```
+
+---
+
+# Actor Investigation
+
+The analyst must separately identify the account that performed the group modification.
+
+Conceptually:
+
+```text
+Actor
+  |
+  | performs modification
+  v
+Target Account
+  |
+  | receives membership
+  v
+Privileged Group
+```
+
+Questions include:
+
+- Was the actor an authorized administrator?
+- Was the administrative account expected to make the change?
+- Was there an approved change request?
+- Was the account recently compromised?
+- Did the actor authenticate from an unusual system?
+
+---
+
+# Authentication Correlation
+
+Search for the target account:
+
+```spl
+index=* "det005test"
+```
+
+Authentication-specific search:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625) "det005test"
+```
+
+Review:
+
+```text
+Successful logons
+Failed logons
+Source systems
+Authentication times
+Logon types
+```
+
+This creates a correlation opportunity with:
+
+```text
+DET-002 — Repeated Failed Authentication
+```
+
+---
+
+# Account Creation Correlation
+
+Search:
+
+```spl
+index=* EventCode=4720 "det005test"
+```
+
+A sequence such as:
+
+```text
+New User Created
+       |
+       v
+Account Added to Domain Admins
+```
+
+would generally warrant more scrutiny than a documented change to an established administrator account.
+
+---
+
+# Endpoint Correlation
+
+Review related telemetry around the change.
+
+Potential related detections:
+
+```text
+DET-002
+Repeated Failed Authentication
+
+DET-003
+Encoded PowerShell Execution
+
+DET-004
+Suspicious Scheduled Task Creation
+
+DET-005
+Privileged Domain Group Membership Change
+```
+
+This enables increasingly realistic multi-stage investigation.
+
+---
+
+# Threat Hunting
+
+A broader group-membership hunt was created:
+
+```spl
+index=* (EventCode=4728 OR EventCode=4732 OR EventCode=4756)
+```
+
+Saved as:
+
+```text
+HUNT - Security Group Membership Additions
+```
+
+The hunting query covers additions across multiple security-group scopes.
+
+DET-005 remains focused specifically on privileged groups.
+
+---
+
+# Detection vs. Hunting
+
+```text
+DET-005
+   |
+   v
+Privileged Group Addition
+   |
+   v
+High-Severity Alert
+```
+
+versus:
+
+```text
+HUNT
+   |
+   v
+All Security Group Additions
+   |
+   v
+Analyst Review
+```
+
+---
+
+# False Positive Considerations
+
+Legitimate privileged-group modifications include:
+
+- Administrator onboarding
+- Approved privilege changes
+- Temporary administrative access
+- Emergency access
+- Infrastructure maintenance
+- Service-account configuration
+- Break-glass procedures
+- Authorized security testing
+
+Every DET-005 alert should therefore be validated against expected administrative activity.
+
+---
+
+# Detection Tuning
+
+Future tuning can incorporate:
+
+```text
+Privileged Group Addition
+          |
+          +---- Newly Created Account?
+          |
+          +---- Known Administrator?
+          |
+          +---- Approved Change?
+          |
+          +---- Recent Failed Logons?
+          |
+          +---- Unusual Source Host?
+          |
+          +---- Related Endpoint Alert?
+          |
+          +---- Off-Hours Change?
+          |
+          v
+      Risk Score
+```
+
+This provides a path toward risk-based alerting.
+
+---
+
+# Cleanup
+
+The test account was removed from Domain Admins:
+
+```powershell
+Remove-ADGroupMember -Identity "Domain Admins" -Members det005test -Confirm:$false
+```
+
+Removal was verified:
+
+```powershell
+Get-ADGroupMember "Domain Admins" | Where-Object {$_.SamAccountName -eq "det005test"}
+```
+
+Expected:
+
+```text
+No output
+```
+
+The temporary normal group was removed:
+
+```powershell
+Remove-ADGroup "DET005-NormalGroup" -Confirm:$false
+```
+
+The temporary account was removed:
+
+```powershell
+Remove-ADUser det005test -Confirm:$false
+```
+
+This returned the domain to its pre-test security state.
+
+---
+
+# Skills Demonstrated
+
+- Active Directory administration
+- Windows Security auditing
+- Windows Event ID 4728 analysis
+- Splunk Enterprise
+- SPL development
+- Identity threat detection
+- Privileged access monitoring
+- Detection engineering
+- Positive detection validation
+- Negative detection validation
+- Scheduled SIEM alerting
+- Threat hunting
+- MITRE ATT&CK mapping
+- Privilege escalation analysis
+- Account manipulation analysis
+- SOC alert triage
+- Authentication correlation
+- False-positive analysis
+- Detection tuning
+- Security testing cleanup
+- Technical documentation
+
+---
+
+# Evidence
+
+Store Sprint 23 evidence under:
+
+```text
+screenshots/sprint-23/
+```
+
+Recommended:
+
+```text
+01-det005-baseline.png
+02-domain-admin-addition-event.png
+03-det005-positive-test.png
+04-det005-negative-test.png
+05-det005-triggered-alert.png
+```
+
+Only screenshots actually captured during testing should be committed.
+
+---
+
+# Sprint Result
+
+**Sprint 23 Status: COMPLETE**
+
+Sprint 23 added privileged Active Directory group monitoring to the SOC lab.
+
+Final workflow:
+
+```text
+Active Directory
+       |
+       v
+Privileged Group Change
+       |
+       v
+Windows Security 4728
+       |
+       v
+Splunk
+       |
+       v
+DET-005
+       |
+       v
+High-Severity Alert
+       |
+       v
+Analyst Investigation
+       |
+       +---- Authorized ----> Document / Close
+       |
+       +---- Unauthorized --> Contain / Escalate
+```
+
+The detection portfolio now includes visibility into:
+
+```text
+Discovery
+    |
+Credential Access
+    |
+Execution
+    |
+Persistence
+    |
+Privilege Escalation / Account Manipulation
+```
