@@ -1,0 +1,327 @@
+# INC-001 — Multi-Stage Windows Attack Investigation
+
+## Incident Metadata
+
+| Field | Value |
+|---|---|
+| Incident ID | INC-001 |
+| Source | CORR-001 |
+| Environment | corp.lab |
+| Initial Severity | Critical |
+| Final Status | Closed |
+| Detection Result | True Positive |
+| Disposition | Benign Positive — Authorized Security Testing |
+| Escalation | Not Required |
+| Containment | Not Required |
+
+---
+
+## Executive Summary
+
+INC-001 was created following CORR-001 — Multi-Stage Windows Attack Activity.
+
+The incident represented a controlled SOC lab simulation containing multiple suspicious Windows behaviors, including failed authentication, remote network authentication, PowerShell execution, scheduled-task activity, and privileged group modification.
+
+The purpose of the investigation was to determine whether the individual detections formed a coherent attack sequence and to practice formal SOC incident investigation procedures.
+
+The investigation determined that the security detections correctly identified intentionally generated suspicious activity.
+
+The incident was therefore classified as:
+
+```text
+True Positive
+Benign Positive — Authorized Security Testing
+```
+
+---
+
+## Detection Summary
+
+| Detection | Event ID | Description |
+|---|---:|---|
+| DET-002 | 4625 | Repeated Failed Authentication |
+| DET-006 | 4624 | Remote Administrative SMB Logon |
+| DET-003 | 4104 | Encoded PowerShell Execution |
+| DET-004 | 4698 | Suspicious Scheduled Task Creation |
+| DET-005 | 4728 | Privileged Domain Group Membership Change |
+
+---
+
+## DET-002 Investigation
+
+### Known Evidence
+
+```text
+Account: tadmin
+Failed Authentication Count: 5
+Event ID: 4625
+```
+
+The five failed authentication attempts had been identified during the original detection/correlation exercise.
+
+During retrospective investigation for INC-001, the corresponding historical events were not returned by the Splunk investigation search.
+
+### Evidence Status
+
+```text
+Original Result: Previously Validated
+Retrospective Search: No Results
+Screenshot Available: No
+Classification: Historical Evidence Gap
+```
+
+No evidence was fabricated or recreated for the incident report.
+
+---
+
+## DET-006 Investigation
+
+Remote network authentication activity was identified with the following information:
+
+```text
+Source IP:
+10.10.10.101
+
+Account:
+WIN11-01$
+```
+
+The activity was associated with the remote-access portion of the simulated attack sequence.
+
+### Detection Engineering Observation
+
+Successful Windows logon Event ID 4624 occurs frequently during legitimate activity.
+
+Therefore, Event ID 4624 alone does not provide sufficient specificity to identify remote administrative SMB behavior.
+
+This resulted in TUNE-001.
+
+---
+
+## Finding F001 — PowerShell Execution
+
+| Field | Value |
+|---|---|
+| Finding | F001 |
+| Detection | DET-003 |
+| Event ID | 4104 |
+| Timestamp | 17:46:20.644 |
+| MITRE Technique | T1059.001 — PowerShell |
+
+### Analyst Finding
+
+PowerShell execution associated with the controlled attack sequence was identified at:
+
+```text
+17:46:20.644
+```
+
+The activity occurred immediately before scheduled-task persistence activity.
+
+---
+
+## Finding F002 — Scheduled Task Persistence
+
+| Field | Value |
+|---|---|
+| Finding | F002 |
+| Detection | DET-004 |
+| Event ID | 4698 |
+| Timestamp | 17:46:39.827 |
+| MITRE Technique | T1053.005 — Scheduled Task/Job: Scheduled Task |
+
+### Analyst Finding
+
+Scheduled-task activity occurred at:
+
+```text
+17:46:39.827
+```
+
+This was approximately 19 seconds after the PowerShell activity recorded in F001.
+
+During retrospective investigation, the historical Event ID 4698 record could not be retrieved through Splunk.
+
+### Evidence Status
+
+```text
+Known Activity: Previously Validated
+Known Timestamp: 17:46:39.827
+Retrospective 4698 Search: No Results
+Classification: Historical Evidence Gap
+```
+
+---
+
+## Finding F003 — Privileged Group Modification
+
+| Field | Value |
+|---|---|
+| Finding | F003 |
+| Detection | DET-005 |
+| Event ID | 4728 |
+| Timestamp | 17:50:17.637 |
+| Added Account | CORR001 Test |
+| Actor | tadmin |
+
+### Analyst Finding
+
+A privileged domain group membership modification occurred at:
+
+```text
+17:50:17.637
+```
+
+The following account was added:
+
+```text
+CORR001 Test
+```
+
+The change was performed by:
+
+```text
+tadmin
+```
+
+The activity occurred after the execution and persistence stages of the simulated attack.
+
+---
+
+## Incident Timeline
+
+| Timestamp | Detection | Observation |
+|---|---|---|
+| Prior Activity | DET-002 | Five failed authentications against `tadmin` |
+| Prior Activity | DET-006 | Remote network activity from `10.10.10.101` using `WIN11-01$` |
+| 17:46:20.644 | DET-003 | PowerShell execution |
+| 17:46:39.827 | DET-004 | Scheduled task activity |
+| 17:50:17.637 | DET-005 | `CORR001 Test` privileged membership modification by `tadmin` |
+
+---
+
+## Attack Reconstruction
+
+```text
+DET-002
+Repeated Failed Authentication
+Account: tadmin
+Failures: 5
+        |
+        v
+DET-006
+Remote Network Authentication
+Source: 10.10.10.101
+Account: WIN11-01$
+        |
+        v
+DET-003 / F001
+PowerShell Execution
+17:46:20.644
+        |
+        v
+DET-004 / F002
+Scheduled Task Activity
+17:46:39.827
+        |
+        v
+DET-005 / F003
+Privileged Group Modification
+17:50:17.637
+Actor: tadmin
+Added Account: CORR001 Test
+```
+
+---
+
+## MITRE ATT&CK Mapping
+
+| Detection | Tactic | Technique |
+|---|---|---|
+| DET-002 | Credential Access | T1110 — Brute Force |
+| DET-006 | Lateral Movement | T1021.002 — SMB/Windows Admin Shares |
+| DET-003 | Execution | T1059.001 — PowerShell |
+| DET-004 | Persistence | T1053.005 — Scheduled Task/Job: Scheduled Task |
+| DET-005 | Privilege Escalation / Persistence | T1098.007 — Account Manipulation |
+
+---
+
+## Evidence Gaps
+
+Two historical evidence gaps were identified during retrospective investigation.
+
+### GAP-001 — Failed Authentication Telemetry
+
+```text
+Event ID: 4625
+Account: tadmin
+Known Failure Count: 5
+Retrospective Search: No Results
+Screenshot: Unavailable
+```
+
+### GAP-002 — Scheduled Task Telemetry
+
+```text
+Event ID: 4698
+Known Timestamp: 17:46:39.827
+Retrospective Search: No Results
+```
+
+The gaps demonstrate why incident evidence should be captured and preserved when detections initially occur.
+
+---
+
+## Incident Determination
+
+The activity was generated intentionally as part of an authorized SOC lab exercise.
+
+The security analytics correctly identified the generated behaviors.
+
+Therefore:
+
+```text
+Detection Result:
+TRUE POSITIVE
+
+Authorization:
+AUTHORIZED SECURITY TESTING
+
+Disposition:
+BENIGN POSITIVE
+
+Incident Status:
+CLOSED
+```
+
+---
+
+## Containment Decision
+
+Containment was not performed because the activity was authorized.
+
+If the activity had been malicious, recommended containment would include:
+
+1. Isolate affected endpoints.
+2. Disable compromised accounts.
+3. Remove unauthorized privileged membership.
+4. Remove malicious scheduled tasks.
+5. Terminate unauthorized remote sessions.
+6. Reset affected credentials.
+7. Search for additional lateral movement.
+8. Preserve forensic evidence.
+9. Escalate to incident response.
+
+---
+
+## Final Assessment
+
+```text
+Incident ID: INC-001
+Initial Severity: Critical
+Detection Result: True Positive
+Final Disposition: Benign Positive — Authorized Security Testing
+Containment Required: No
+Escalation Required: No
+Status: Closed
+```
