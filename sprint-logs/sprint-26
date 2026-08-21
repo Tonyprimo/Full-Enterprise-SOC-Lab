@@ -1,0 +1,366 @@
+# Sprint 26 — SOC Incident Case Management & Investigation
+
+**Status:** Complete 
+**Incident:** INC-001 — Multi-Stage Windows Attack Investigation 
+**Source Correlation:** CORR-001 — Multi-Stage Windows Attack Activity 
+**Environment:** corp.lab
+
+---
+
+## Objective
+
+Sprint 26 expanded the SOC lab from detection correlation into formal incident investigation and case management.
+
+Sprint 25 demonstrated that multiple independent detections could be correlated into a single multi-stage security event. Sprint 26 used that activity as the basis for a retrospective SOC investigation.
+
+The objectives were to:
+
+- Create a formal incident record
+- Investigate individual detection stages
+- Reconstruct the attack timeline
+- Document analyst findings
+- Identify historical evidence gaps
+- Determine incident severity and disposition
+- Document containment recommendations
+- Identify detection-tuning opportunities
+
+---
+
+## Incident
+
+```text
+Incident ID: INC-001
+Title: Multi-Stage Windows Attack Investigation
+Source: CORR-001
+Initial Severity: Critical
+Environment: corp.lab
+Primary Endpoint: WIN11-02
+Domain Controller: DC01
+SIEM: Splunk Enterprise
+```
+
+---
+
+## Detection Investigation Summary
+
+| Detection | Event ID | Investigation Result |
+|---|---:|---|
+| DET-002 | 4625 | Historical event search unavailable; prior result documented |
+| DET-006 | 4624 | Investigated |
+| DET-003 | 4104 | Investigated |
+| DET-004 | 4698 | Historical Event ID search unavailable; activity timestamp retained |
+| DET-005 | 4728 | Investigated |
+
+---
+
+## DET-002 — Repeated Failed Authentication
+
+The original Sprint 25 validation identified five failed authentication attempts against the `tadmin` account.
+
+```text
+Account: tadmin
+Failure Count: 5
+Event ID: 4625
+```
+
+During the Sprint 26 retrospective investigation, the historical 4625 events could not be retrieved through the investigation search.
+
+Because no supporting results were available during Sprint 26, no retrospective evidence screenshot was captured.
+
+### Investigation Status
+
+```text
+Original Detection: Validated
+Account: tadmin
+Failure Count: 5
+Retrospective Search Results: Unavailable
+Screenshot: Unavailable
+Status: Historical Evidence Gap
+```
+
+The previously documented Sprint 25 result was retained, but the missing historical telemetry was explicitly documented rather than represented as newly verified evidence.
+
+---
+
+## DET-006 — Remote Administrative SMB Logon
+
+Remote network authentication activity associated with the attack sequence was investigated.
+
+```text
+Source IP: 10.10.10.101
+Account: WIN11-01$
+```
+
+The activity provided evidence of communication originating from WIN11-01 during the simulated attack sequence.
+
+### Analyst Observation
+
+The investigation also demonstrated that Event ID 4624 alone is too broad for reliable identification of remote administrative SMB activity because Windows generates successful logon events during normal operations.
+
+This observation resulted in a detection-tuning recommendation for DET-006.
+
+---
+
+## F001 — Suspicious PowerShell Execution
+
+```text
+Finding ID: F001
+Detection: DET-003
+Event ID: 4104
+Timestamp: 17:46:20.644
+MITRE ATT&CK: T1059.001 — PowerShell
+```
+
+PowerShell activity associated with the simulated attack sequence was identified during retrospective investigation.
+
+The activity occurred immediately before the persistence stage of the attack.
+
+### Finding
+
+```text
+Suspicious PowerShell activity was identified at 17:46:20.644.
+
+The event occurred shortly before scheduled-task creation, establishing
+a temporal relationship between execution and persistence activity.
+```
+
+---
+
+## F002 — Scheduled Task Persistence
+
+```text
+Finding ID: F002
+Detection: DET-004
+Event ID: 4698
+Timestamp: 17:46:39.827
+MITRE ATT&CK: T1053.005 — Scheduled Task/Job: Scheduled Task
+```
+
+The scheduled-task activity associated with the original attack simulation occurred approximately 19 seconds after the PowerShell activity identified in F001.
+
+During retrospective investigation, Event ID 4698 could not be retrieved through the historical Splunk search.
+
+The previously established activity timestamp was retained as part of the incident timeline, while the lack of retrievable event-level evidence was documented as an evidence gap.
+
+### Investigation Status
+
+```text
+Activity Timestamp: 17:46:39.827
+Retrospective Event Search: Unavailable
+Status: Historical Evidence Gap
+```
+
+---
+
+## F003 — Privileged Group Membership Change
+
+```text
+Finding ID: F003
+Detection: DET-005
+Event ID: 4728
+Timestamp: 17:50:17.637
+Added Account: CORR001 Test
+Actor: tadmin
+```
+
+The account `CORR001 Test` was added to a privileged domain group by `tadmin`.
+
+The event occurred after the PowerShell execution and scheduled-task activity.
+
+### Finding
+
+```text
+A privileged domain group membership modification was identified at
+17:50:17.637.
+
+Added Account:
+CORR001 Test
+
+Actor:
+tadmin
+```
+
+This represented the privilege-modification stage of the simulated attack sequence.
+
+---
+
+## Reconstructed Incident Timeline
+
+| Time | Activity | Detection |
+|---|---|---|
+| Prior Stage | Five failed authentication attempts against `tadmin` | DET-002 |
+| Prior Stage | Remote network activity from `10.10.10.101` using `WIN11-01$` | DET-006 |
+| 17:46:20.644 | PowerShell execution | DET-003 / F001 |
+| 17:46:39.827 | Scheduled task activity | DET-004 / F002 |
+| 17:50:17.637 | `CORR001 Test` privileged membership change by `tadmin` | DET-005 / F003 |
+
+---
+
+## Attack Progression
+
+```text
+Repeated Failed Authentication
+        |
+        v
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+17:46:20.644
+        |
+        | ~19 seconds
+        v
+Scheduled Task Activity
+17:46:39.827
+        |
+        v
+Privileged Group Modification
+17:50:17.637
+```
+
+---
+
+## Historical Evidence Gaps
+
+The retrospective investigation identified two evidence-availability limitations.
+
+### DET-002
+
+```text
+Event ID: 4625
+Known Account: tadmin
+Known Failure Count: 5
+Historical Search Result: Unavailable
+```
+
+### DET-004
+
+```text
+Event ID: 4698
+Known Timestamp: 17:46:39.827
+Historical Search Result: Unavailable
+```
+
+These gaps were documented rather than reconstructed or represented as evidence that was available during Sprint 26.
+
+This demonstrated the importance of evidence preservation and telemetry retention during incident response.
+
+---
+
+## Incident Assessment
+
+The correlated activity represented a controlled SOC lab simulation.
+
+The detections identified intentionally generated suspicious behavior.
+
+Therefore:
+
+```text
+Detection Result: True Positive
+Disposition: Benign Positive — Authorized Security Testing
+```
+
+The incident was not classified as a false positive because the detections correctly identified the generated behaviors.
+
+---
+
+## Initial Severity
+
+```text
+CRITICAL
+```
+
+The initial severity was inherited from CORR-001 because multiple suspicious behaviors occurred within the correlation window.
+
+---
+
+## Final Disposition
+
+```text
+Status: Closed
+Detection Result: True Positive
+Disposition: Benign Positive — Authorized Security Testing
+Escalation: Not Required
+Containment: Not Required
+```
+
+---
+
+## Detection Tuning Opportunity
+
+### TUNE-001
+
+```text
+Detection:
+DET-006 — Remote Administrative SMB Logon
+
+Issue:
+Event ID 4624 alone is too broad because normal Windows activity
+generates successful logon events.
+
+Recommendation:
+Refine DET-006 using network-logon and administrative context such as:
+
+- Logon Type 3
+- Source IP
+- Target account
+- Target host
+- Administrative-share activity
+
+Status:
+Open
+```
+
+---
+
+## Skills Demonstrated
+
+- SOC incident investigation
+- Incident case management
+- Splunk investigation
+- Windows event analysis
+- Timeline reconstruction
+- Evidence validation
+- Evidence-gap documentation
+- MITRE ATT&CK analysis
+- True-positive classification
+- Incident disposition
+- Detection tuning
+- Analyst documentation
+- Incident-response decision making
+
+---
+
+## Outcome
+
+Sprint 26 extended the SOC workflow from correlation into formal investigation.
+
+```text
+Security Telemetry
+        |
+        v
+Detections
+        |
+        v
+CORR-001
+        |
+        v
+INC-001
+        |
+        v
+Evidence Collection
+        |
+        v
+Timeline Reconstruction
+        |
+        v
+Analyst Findings
+        |
+        v
+Incident Disposition
+        |
+        v
+Detection Tuning
+```
+
+**Sprint 26 Status: COMPLETE**
