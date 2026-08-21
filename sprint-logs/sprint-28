@@ -1,0 +1,524 @@
+# Sprint 28 — Threat Hunting & Hypothesis-Driven Investigation
+
+**Status:** Complete 
+**Hunt ID:** HUNT-001 
+**Primary Finding:** HF-001 
+**Detection Opportunity:** DET-OPP-001 
+**Environment:** corp.lab 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Sprint 28 expanded the SOC lab from reactive detection and incident investigation into proactive threat hunting.
+
+Previous sprints established:
+
+- Windows security telemetry collection
+- Detection engineering
+- MITRE ATT&CK mapping
+- Multi-detection correlation
+- Incident investigation
+- Detection tuning
+- False-positive reduction
+
+Sprint 28 introduced a hypothesis-driven threat hunting workflow designed to identify suspicious relationships between events that may not independently trigger a security alert.
+
+The primary objectives were to:
+
+- Create a formal threat hunt
+- Define a hunt hypothesis
+- Establish relevant telemetry sources
+- Review authentication behavior
+- Hunt remote network logons
+- Hunt PowerShell activity
+- Review persistence and privilege-change telemetry
+- Generate controlled hunt activity
+- Pivot between multiple telemetry sources
+- Reconstruct activity chronologically
+- Document a formal hunt finding
+- Identify a candidate detection opportunity
+
+---
+
+## Hunt Definition
+
+```text
+Hunt ID:
+HUNT-001
+
+Name:
+Suspicious Windows Post-Authentication Activity
+
+Environment:
+corp.lab
+
+Status:
+Complete
+```
+
+---
+
+## Hunt Hypothesis
+
+```text
+If an account is being used for unauthorized access, suspicious
+activity may occur shortly after authentication, including PowerShell
+execution, persistence creation, or privileged account modification,
+even if no individual alert reaches its configured threshold.
+```
+
+The hunt was designed to evaluate activity relationships rather than treating individual Windows events as isolated indicators.
+
+---
+
+## Hunt Methodology
+
+```text
+Define Hypothesis
+        |
+        v
+Identify Data Sources
+        |
+        v
+Establish Baseline
+        |
+        v
+Search Authentication Activity
+        |
+        v
+Search Post-Authentication Activity
+        |
+        v
+Pivot Across Telemetry
+        |
+        v
+Reconstruct Timeline
+        |
+        v
+Document Finding
+        |
+        v
+Identify Detection Opportunity
+```
+
+---
+
+## Data Sources
+
+HUNT-001 evaluated the following Windows telemetry:
+
+| Event ID | Purpose |
+|---:|---|
+| 4624 | Successful authentication |
+| 4625 | Failed authentication |
+| 4104 | PowerShell Script Block Logging |
+| 4698 | Scheduled task creation |
+| 4728 | Privileged group membership modification |
+
+The hunt also incorporated the refined DET-006 network-logon methodology:
+
+```text
+Event ID 4624
++
+Logon Type 3
++
+Non-local source address
+```
+
+---
+
+## Authentication Baseline
+
+Successful authentication activity was reviewed using:
+
+```spl
+index=* EventCode=4624
+| stats count by host
+| sort - count
+```
+
+Network authentication was then isolated using:
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| stats count by host TargetUserName IpAddress
+| sort - count
+```
+
+This allowed remote network authentication to be reviewed independently from the broader population of successful Windows logons.
+
+---
+
+## Authentication Sequence Hunt
+
+Successful and failed authentication events were reviewed chronologically.
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625)
+| eval auth_result=if(EventCode=4625,"FAILURE","SUCCESS")
+| sort _time
+| table _time host TargetUserName IpAddress LogonType auth_result
+```
+
+The objective was to identify patterns such as:
+
+```text
+Authentication Failure
+        |
+        v
+Authentication Failure
+        |
+        v
+Authentication Failure
+        |
+        v
+Successful Authentication
+```
+
+Such a sequence does not independently establish compromise but can provide useful context for additional investigation.
+
+---
+
+## Remote Network Logon Hunt
+
+The tuned DET-006 methodology was reused as a threat-hunting query:
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| sort _time
+| table _time host TargetUserName IpAddress WorkstationName LogonType
+```
+
+Remote authentication was also grouped by source and account:
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| stats count dc(host) as target_hosts values(host) as targets by IpAddress TargetUserName
+| sort - target_hosts
+```
+
+This provides a hunting method for identifying accounts or systems authenticating across multiple endpoints.
+
+---
+
+## PowerShell Hunt
+
+PowerShell Script Block Logging was reviewed using Event ID 4104.
+
+Potentially interesting characteristics were searched using:
+
+```spl
+index=* EventCode=4104
+("EncodedCommand" OR "FromBase64String" OR "Invoke-" OR "DownloadString" OR "Hidden")
+| sort _time
+| table _time host Message
+```
+
+This search is intended for analyst investigation and does not independently classify matching PowerShell activity as malicious.
+
+---
+
+## Persistence Hunt
+
+Scheduled-task telemetry was reviewed using:
+
+```spl
+index=* EventCode=4698
+| sort _time
+| table _time host SubjectUserName TaskName
+```
+
+Because Event ID 4698 availability had previously been inconsistent in the lab, additional process-oriented searches were included:
+
+```spl
+index=* ("schtasks.exe" OR "Register-ScheduledTask")
+| sort _time
+| table _time host _raw
+```
+
+This provided an alternate hunting path where direct scheduled-task audit telemetry was unavailable.
+
+---
+
+## Privilege Modification Hunt
+
+Privileged group membership activity was reviewed using:
+
+```spl
+index=* EventCode=4728
+| sort _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+Domain Admins activity could be isolated using:
+
+```spl
+index=* EventCode=4728 "Domain Admins"
+| sort _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+---
+
+## Controlled Hunt Simulation
+
+A controlled sequence was generated to validate the hunt methodology.
+
+The sequence consisted of:
+
+```text
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+```
+
+Remote network authentication was generated from WIN11-01 to WIN11-02 using:
+
+```cmd
+net use \\WIN11-02\IPC$ /user:corp\tadmin *
+```
+
+Controlled PowerShell activity was then generated on WIN11-02:
+
+```powershell
+$cmd='Write-Output "Sprint28 HUNT001 Test"'
+```
+
+```powershell
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+```
+
+```powershell
+powershell.exe -EncodedCommand $encoded
+```
+
+The test produced:
+
+```text
+Sprint28 HUNT001 Test
+```
+
+---
+
+## Cross-Telemetry Investigation
+
+Network authentication and PowerShell activity were reviewed together using:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4104)
+| eval activity=case(
+EventCode=4624 AND LogonType=3,"Network Logon",
+EventCode=4104,"PowerShell",
+true(),"Other")
+| where activity!="Other"
+| sort _time
+| table _time host EventCode activity TargetUserName IpAddress
+```
+
+The objective was to identify temporal relationships between remote authentication and subsequent endpoint execution.
+
+---
+
+## HF-001 — Hunt Finding
+
+```text
+Finding ID:
+HF-001
+
+Hunt:
+HUNT-001
+
+Finding:
+Remote network authentication followed by PowerShell execution
+on the target Windows endpoint.
+
+Source:
+WIN11-01
+
+Target:
+WIN11-02
+
+Associated Telemetry:
+4624 / Logon Type 3
+4104
+
+Disposition:
+Authorized Security Simulation
+```
+
+---
+
+## Analyst Assessment
+
+Neither component of HF-001 independently established malicious activity.
+
+```text
+Remote Network Logon
+        |
+        +---- Alone ----> Requires Context
+
+PowerShell Execution
+        |
+        +---- Alone ----> Requires Context
+```
+
+When evaluated chronologically:
+
+```text
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+```
+
+the relationship provides higher-value investigative context.
+
+This demonstrated the benefit of hunting across telemetry sources rather than reviewing individual events in isolation.
+
+---
+
+## Hunt Outcome
+
+```text
+Hunt ID:
+HUNT-001
+
+Result:
+Validated Hunt Methodology
+
+Finding:
+HF-001
+
+Security Status:
+Authorized Security Simulation
+
+Detection Opportunity:
+YES
+
+Detection Opportunity ID:
+DET-OPP-001
+
+Status:
+COMPLETE
+```
+
+---
+
+## Detection Opportunity
+
+The hunt identified a candidate analytic:
+
+```text
+DET-OPP-001
+Remote Network Logon Followed by Suspicious PowerShell
+```
+
+Conceptually:
+
+```text
+4624 / Logon Type 3
+Remote Network Authentication
+        |
+        | Within 10 Minutes
+        v
+4104
+Suspicious PowerShell
+        |
+        v
+Potential Post-Authentication Activity
+```
+
+The candidate was documented but was not promoted directly into a production detection during Sprint 28.
+
+This preserves the distinction between:
+
+```text
+Interesting Hunt Finding
+```
+
+and:
+
+```text
+Validated Detection
+```
+
+---
+
+## Hunt Coverage
+
+| Hunt Area | Telemetry | Coverage |
+|---|---|---|
+| Failed authentication | 4625 | Covered where available |
+| Successful network authentication | 4624 / Type 3 | Covered |
+| PowerShell | 4104 | Covered |
+| Scheduled tasks | 4698 / process telemetry | Partial |
+| Privileged group modification | 4728 | Covered |
+
+---
+
+## Lab Infrastructure Observation
+
+During Sprint 28 startup validation, a workstation domain secure-channel issue was encountered.
+
+The secure channel was repaired before continuing the hunt.
+
+The issue was treated as a lab infrastructure condition rather than security evidence and was not included in HUNT-001 findings.
+
+---
+
+## Skills Demonstrated
+
+- Threat hunting
+- Hypothesis-driven investigation
+- Windows authentication analysis
+- PowerShell analysis
+- Splunk SPL
+- Cross-event investigation
+- Timeline analysis
+- Data-source pivoting
+- Baseline analysis
+- Hunt finding documentation
+- Detection-gap identification
+- Detection opportunity development
+- SOC investigative reasoning
+
+---
+
+## Outcome
+
+Sprint 28 extended the SOC lifecycle from reactive security monitoring into proactive threat hunting.
+
+```text
+Telemetry
+    |
+    v
+Detection Engineering
+    |
+    v
+Correlation
+    |
+    v
+Incident Investigation
+    |
+    v
+Detection Tuning
+    |
+    v
+Threat Hunting
+    |
+    v
+HF-001
+    |
+    v
+DET-OPP-001
+```
+
+The hunt demonstrated how analyst-driven investigation can identify relationships between security events and convert those findings into candidates for future detection engineering.
+
+**Sprint 28 Status: COMPLETE**
