@@ -1,0 +1,348 @@
+# Sprint 25 — Detection Correlation and Multi-Stage Attack Analysis
+
+**Status:** Complete 
+**Date Completed:** August 20, 2026 
+**Primary Deliverable:** CORR-001 — Multi-Stage Windows Attack Activity
+
+---
+
+## Objective
+
+Sprint 25 expanded the SOC lab from individual detection engineering into multi-stage attack correlation.
+
+The objective was to correlate previously validated detections into a single incident-level analytic capable of:
+
+- Reconstructing a simulated attack sequence
+- Mapping correlated activity to MITRE ATT&CK
+- Assigning risk scores
+- Prioritizing incident severity
+- Supporting analyst investigation
+- Distinguishing isolated alerts from multi-stage behavior
+
+---
+
+## Detections Used
+
+| Detection | Description | Event ID |
+|---|---|---:|
+| DET-002 | Repeated Failed Authentication | 4625 |
+| DET-006 | Remote Administrative SMB Logon | 4624 |
+| DET-003 | Encoded PowerShell Execution | 4104 |
+| DET-004 | Suspicious Scheduled Task Creation | 4698 |
+| DET-005 | Privileged Domain Group Membership Change | 4728 |
+
+DET-001 was not included in the initial correlation scenario because Sprint 25 focused on Windows authentication, execution, persistence, privilege, and lateral-movement activity.
+
+---
+
+## Controlled Attack Timeline
+
+A controlled attack sequence was generated on August 20, 2026.
+
+| Time | Detection | Activity |
+|---|---|---|
+| 5:32 PM | DET-002 | Repeated failed authentication |
+| 5:37 PM | DET-006 | Remote administrative SMB logon |
+| 5:43 PM | DET-003 | Encoded PowerShell execution |
+| 5:46 PM | DET-004 | Suspicious scheduled task creation |
+| 5:51 PM | DET-005 | Privileged domain group membership change |
+
+The complete simulated sequence occurred within approximately 19 minutes.
+
+---
+
+## Attack Progression
+
+```text
+Repeated Failed Authentication
+        |
+        v
+Remote Administrative SMB Logon
+        |
+        v
+Encoded PowerShell Execution
+        |
+        v
+Scheduled Task Creation
+        |
+        v
+Privileged Group Membership Change
+```
+
+---
+
+## MITRE ATT&CK Mapping
+
+| Detection | Tactic | Technique |
+|---|---|---|
+| DET-002 | Credential Access | T1110 — Brute Force |
+| DET-006 | Lateral Movement | T1021.002 — SMB/Windows Admin Shares |
+| DET-003 | Execution | T1059.001 — PowerShell |
+| DET-004 | Persistence | T1053.005 — Scheduled Task/Job: Scheduled Task |
+| DET-005 | Privilege Escalation / Persistence | T1098.007 — Account Manipulation: Additional Local or Domain Groups |
+
+CORR-001 represents a correlation across multiple ATT&CK techniques rather than a single ATT&CK technique.
+
+---
+
+## Detection Classification
+
+Relevant Windows events were classified into existing detection categories.
+
+```spl
+| eval detection=case(
+EventCode=4625,"DET-002 - repeated failed authentication",
+EventCode=4624,"DET-006 - remote administrative SMB logon",
+EventCode=4104,"DET-003 - encoded powershell execution",
+EventCode=4698,"DET-004 - suspicious scheduled task creation",
+EventCode=4728,"DET-005 - privileged domain group membership change",
+true(),"Other")
+```
+
+---
+
+## MITRE Tactic Classification
+
+```spl
+| eval tactic=case(
+detection="DET-002 - repeated failed authentication","Credential Access",
+detection="DET-006 - remote administrative SMB logon","Lateral Movement",
+detection="DET-003 - encoded powershell execution","Execution",
+detection="DET-004 - suspicious scheduled task creation","Persistence",
+detection="DET-005 - privileged domain group membership change","Privilege Escalation",
+true(),"Other")
+```
+
+---
+
+## MITRE Technique Classification
+
+```spl
+| eval technique=case(
+detection="DET-002 - repeated failed authentication","T1110",
+detection="DET-006 - remote administrative SMB logon","T1021.002",
+detection="DET-003 - encoded powershell execution","T1059.001",
+detection="DET-004 - suspicious scheduled task creation","T1053.005",
+detection="DET-005 - privileged domain group membership change","T1098.007",
+true(),"N/A")
+```
+
+---
+
+## Risk Model
+
+A lab-defined risk model was implemented.
+
+| Detection | Risk Score |
+|---|---:|
+| DET-002 | 20 |
+| DET-006 | 35 |
+| DET-003 | 30 |
+| DET-004 | 30 |
+| DET-005 | 40 |
+
+Maximum simulated risk score:
+
+```text
+155
+```
+
+Risk severity thresholds:
+
+| Score | Severity |
+|---:|---|
+| 0–29 | Low |
+| 30–59 | Medium |
+| 60–99 | High |
+| 100+ | Critical |
+
+These values are lab-defined and are not presented as an industry-standard risk model.
+
+---
+
+## Risk Scoring SPL
+
+```spl
+| eval risk=case(
+detection="DET-002 - repeated failed authentication",20,
+detection="DET-006 - remote administrative SMB logon",35,
+detection="DET-003 - encoded powershell execution",30,
+detection="DET-004 - suspicious scheduled task creation",30,
+detection="DET-005 - privileged domain group membership change",40,
+true(),0)
+```
+
+---
+
+## Severity Calculation
+
+```spl
+| eval severity=case(
+total_risk>=100,"CRITICAL",
+total_risk>=60,"HIGH",
+total_risk>=30,"MEDIUM",
+true(),"LOW")
+```
+
+---
+
+## CORR-001
+
+Created:
+
+```text
+CORR-001 — Multi-Stage Windows Attack Activity
+```
+
+Purpose:
+
+> Correlate multiple validated Windows security detections occurring within the same investigation window to identify potential multi-stage attack activity.
+
+Correlation threshold:
+
+```text
+Three or more distinct detection categories
+```
+
+The threshold reduces the likelihood that one isolated event is treated as a critical incident.
+
+---
+
+## Positive Validation
+
+The controlled attack produced:
+
+```text
+DET-002
+DET-006
+DET-003
+DET-004
+DET-005
+```
+
+Five distinct detection categories were observed.
+
+Because:
+
+```text
+5 >= 3
+```
+
+CORR-001 satisfied the correlation threshold.
+
+**Positive Validation:** PASS
+
+---
+
+## Negative Validation
+
+A narrow time window containing insufficient detection diversity was tested.
+
+The correlation condition:
+
+```text
+detection_count >= 3
+```
+
+was not satisfied.
+
+CORR-001 therefore returned no result.
+
+**Negative Validation:** PASS
+
+---
+
+## Analyst Interpretation
+
+The sequence demonstrated how correlation changes the meaning of individual security events.
+
+Viewed independently:
+
+```text
+Failed Authentication
+Remote Administrative Access
+PowerShell Execution
+Scheduled Task Creation
+Privileged Group Change
+```
+
+may each have legitimate administrative explanations.
+
+Viewed together:
+
+```text
+Authentication Failure
+        |
+        v
+Remote Access
+        |
+        v
+Suspicious Execution
+        |
+        v
+Persistence
+        |
+        v
+Privilege Modification
+```
+
+the activity becomes substantially more significant.
+
+---
+
+## Cleanup
+
+Persistent changes created during the controlled simulation were removed after validation.
+
+Cleanup included:
+
+- Removing the test SMB session
+- Removing the test scheduled task
+- Removing test privileged-group membership
+- Removing temporary test account artifacts
+
+The environment was returned to its pre-test state.
+
+---
+
+## Skills Demonstrated
+
+- SIEM correlation
+- Splunk SPL
+- Windows security telemetry
+- Detection engineering
+- Risk-based alerting
+- MITRE ATT&CK mapping
+- Multi-stage attack reconstruction
+- Positive correlation validation
+- Negative correlation validation
+- Incident triage
+- SOC investigation workflow
+- False-positive reduction
+
+---
+
+## Outcome
+
+Sprint 25 transitioned the SOC lab from independent detection alerts toward incident-level correlation.
+
+```text
+Telemetry
+    |
+    v
+Individual Detections
+    |
+    v
+Correlation
+    |
+    v
+Risk Assessment
+    |
+    v
+Incident
+    |
+    v
+Analyst Investigation
+```
+
+**Sprint 25 Status: COMPLETE**
