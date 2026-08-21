@@ -1,0 +1,447 @@
+# INC-001 — Analyst Investigation Report
+
+## Case Information
+
+| Field | Value |
+|---|---|
+| Incident | INC-001 |
+| Correlation | CORR-001 |
+| Environment | corp.lab |
+| Initial Severity | Critical |
+| Detection Result | True Positive |
+| Final Disposition | Benign Positive — Authorized Security Testing |
+| Status | Closed |
+
+---
+
+## Investigation Objective
+
+Investigate the multi-stage Windows security activity identified by CORR-001 and determine:
+
+1. What occurred
+2. Which systems and accounts were involved
+3. Whether individual detections were related
+4. Whether the activity represented a security incident
+5. Whether containment or escalation was required
+
+---
+
+## Investigation Workflow
+
+```text
+CORR-001 Triggered
+        |
+        v
+Create INC-001
+        |
+        v
+Review Authentication Activity
+        |
+        v
+Review Remote Access
+        |
+        v
+Review PowerShell Execution
+        |
+        v
+Review Persistence
+        |
+        v
+Review Privilege Modification
+        |
+        v
+Reconstruct Timeline
+        |
+        v
+Determine Scope
+        |
+        v
+Validate Authorization
+        |
+        v
+Assign Disposition
+```
+
+---
+
+## Authentication Investigation
+
+### DET-002
+
+```text
+Event ID: 4625
+Account: tadmin
+Failure Count: 5
+```
+
+Five failed authentication attempts against `tadmin` were documented during the original detection exercise.
+
+The historical events could not be retrieved during the retrospective INC-001 investigation.
+
+```text
+Retrospective Search Result: No Results
+Evidence Screenshot: Unavailable
+Status: Historical Evidence Gap
+```
+
+The previously established count was retained as historical case context but was not represented as newly collected evidence.
+
+---
+
+## Remote Access Investigation
+
+### DET-006
+
+```text
+Event ID: 4624
+Source IP: 10.10.10.101
+Account: WIN11-01$
+```
+
+Remote network authentication activity was associated with the attack sequence.
+
+The investigation identified a detection-engineering limitation: Event ID 4624 alone is not sufficiently specific to distinguish suspicious remote administration from normal successful Windows authentication.
+
+---
+
+## Finding F001
+
+### Suspicious PowerShell Execution
+
+```text
+Finding ID: F001
+Detection: DET-003
+Event ID: 4104
+Timestamp: 17:46:20.644
+MITRE ATT&CK: T1059.001
+```
+
+PowerShell activity was identified during the execution stage of the attack simulation.
+
+The timing became significant when compared with the following persistence activity.
+
+---
+
+## Finding F002
+
+### Scheduled Task Persistence
+
+```text
+Finding ID: F002
+Detection: DET-004
+Event ID: 4698
+Timestamp: 17:46:39.827
+MITRE ATT&CK: T1053.005
+```
+
+Scheduled-task activity occurred approximately 19 seconds after the PowerShell activity.
+
+The historical 4698 event itself could not be retrieved during retrospective review.
+
+```text
+Historical Event Search: No Results
+Status: Historical Evidence Gap
+```
+
+The previously established timestamp was retained for timeline reconstruction.
+
+---
+
+## Finding F003
+
+### Privileged Group Membership Change
+
+```text
+Finding ID: F003
+Detection: DET-005
+Event ID: 4728
+Timestamp: 17:50:17.637
+Added Account: CORR001 Test
+Actor: tadmin
+```
+
+A privileged domain group modification occurred after execution and persistence activity.
+
+The account:
+
+```text
+CORR001 Test
+```
+
+was added by:
+
+```text
+tadmin
+```
+
+This represented the final privilege-related stage of the simulated attack sequence.
+
+---
+
+## Timeline Reconstruction
+
+```text
+DET-002
+5 Failed Authentication Attempts
+Account: tadmin
+        |
+        v
+DET-006
+Remote Network Authentication
+Source: 10.10.10.101
+Account: WIN11-01$
+        |
+        v
+17:46:20.644
+F001 / DET-003
+PowerShell Execution
+        |
+        | 19.183 seconds
+        v
+17:46:39.827
+F002 / DET-004
+Scheduled Task Activity
+        |
+        | 3 minutes 37.810 seconds
+        v
+17:50:17.637
+F003 / DET-005
+Privileged Group Modification
+Actor: tadmin
+Added Account: CORR001 Test
+```
+
+---
+
+## Analyst Assessment
+
+The individual security events gain additional significance when evaluated as a sequence.
+
+```text
+Authentication Activity
+        |
+        v
+Remote Access
+        |
+        v
+Execution
+        |
+        v
+Persistence
+        |
+        v
+Privilege Modification
+```
+
+The temporal relationship between F001, F002, and F003 supports the interpretation of the events as components of the same controlled attack simulation.
+
+---
+
+## Evidence Assessment
+
+### Available Evidence
+
+```text
+DET-006 — Remote network authentication details
+F001    — PowerShell timestamp
+F002    — Previously established scheduled-task timestamp
+F003    — Privileged membership modification details
+```
+
+### Historical Evidence Gaps
+
+```text
+DET-002 / Event 4625
+Historical Splunk results unavailable
+No retrospective screenshot available
+
+DET-004 / Event 4698
+Historical Splunk event unavailable during retrospective search
+```
+
+These gaps were explicitly preserved in the investigation record.
+
+---
+
+## Detection Classification
+
+The incident was intentionally generated, but the security analytics correctly identified suspicious behavior.
+
+Therefore:
+
+```text
+False Positive? NO
+
+True Positive? YES
+```
+
+The appropriate disposition is:
+
+```text
+Benign Positive — Authorized Security Testing
+```
+
+---
+
+## Severity Assessment
+
+### Initial Severity
+
+```text
+CRITICAL
+```
+
+The initial severity reflected the combination of multiple suspicious behaviors identified by CORR-001.
+
+### Final Assessment
+
+After analyst investigation:
+
+```text
+Activity Authorized: YES
+Compromise Confirmed: NO
+Containment Required: NO
+Escalation Required: NO
+```
+
+---
+
+## TUNE-001 — DET-006 Refinement
+
+### Detection
+
+```text
+DET-006 — Remote Administrative SMB Logon
+```
+
+### Problem
+
+Event ID 4624 represents successful Windows authentication and is generated frequently during normal system activity.
+
+Using:
+
+```text
+EventCode=4624
+```
+
+alone can produce excessive unrelated results.
+
+### Recommended Improvement
+
+Future DET-006 tuning should incorporate additional context such as:
+
+```text
+EventCode=4624
+LogonType=3
+Source IP
+Target account
+Target host
+Administrative context
+```
+
+Additional SMB or administrative-share telemetry should be incorporated where available.
+
+### Status
+
+```text
+OPEN
+```
+
+---
+
+## Lessons Learned
+
+### 1. Correlation Adds Context
+
+Individual events may appear benign when reviewed independently.
+
+Their temporal relationship can substantially increase investigative significance.
+
+### 2. Evidence Preservation Matters
+
+The inability to retrieve historical 4625 and 4698 events demonstrated that successful detection does not guarantee evidence will remain readily available during later investigation.
+
+Important alert evidence should be preserved when initially detected.
+
+### 3. Event IDs Require Context
+
+A Windows Event ID alone does not always represent a complete detection.
+
+Event ID 4624 demonstrated the need to incorporate fields such as logon type, source, account, destination, and administrative context.
+
+### 4. True Positive Does Not Automatically Mean Malicious
+
+The detections correctly identified the generated behavior.
+
+Because the behavior was authorized, the incident was a:
+
+```text
+True Positive
++
+Authorized Activity
+=
+Benign Positive
+```
+
+---
+
+## Hypothetical Response
+
+If the activity had been unauthorized, recommended response actions would include:
+
+1. Isolate affected systems.
+2. Disable suspected compromised accounts.
+3. Remove unauthorized privileged memberships.
+4. Remove malicious scheduled tasks.
+5. Terminate unauthorized remote sessions.
+6. Reset affected credentials.
+7. Hunt for additional lateral movement.
+8. Review other privileged-account changes.
+9. Preserve relevant evidence.
+10. Escalate to incident response.
+
+---
+
+## Final Disposition
+
+```text
+Incident ID:
+INC-001
+
+Source:
+CORR-001
+
+Initial Severity:
+Critical
+
+Detection Result:
+True Positive
+
+Disposition:
+Benign Positive — Authorized Security Testing
+
+Containment:
+Not Required
+
+Escalation:
+Not Required
+
+Status:
+Closed
+```
+
+---
+
+## Investigation Status
+
+```text
+Incident Creation:          COMPLETE
+Detection Review:           COMPLETE
+Timeline Reconstruction:    COMPLETE
+Evidence Assessment:        COMPLETE
+MITRE Analysis:             COMPLETE
+Severity Assessment:        COMPLETE
+Disposition:                COMPLETE
+Tuning Opportunity:         DOCUMENTED
+Incident:                   CLOSED
+```
