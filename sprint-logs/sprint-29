@@ -1,0 +1,487 @@
+# Sprint 29 — Correlation Engineering: Remote Network Logon Followed by PowerShell
+
+**Status:** Complete 
+**Correlation:** CORR-002 
+**Detection Opportunity:** DET-OPP-001 
+**Environment:** corp.lab 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Sprint 29 converted the threat-hunting detection opportunity identified in Sprint 28 into an implemented correlation analytic.
+
+Sprint 28 produced:
+
+```text
+HUNT-001
+    |
+    v
+HF-001
+    |
+    v
+DET-OPP-001
+```
+
+The objective of Sprint 29 was to engineer and validate a correlation rule capable of identifying:
+
+```text
+Remote Network Logon
+        |
+        | Short Time Window
+        v
+PowerShell Execution
+```
+
+on the same Windows endpoint.
+
+The resulting correlation analytic was:
+
+```text
+CORR-002 — Remote Network Logon Followed by PowerShell
+```
+
+---
+
+## Source Detection Opportunity
+
+```text
+DET-OPP-001 — Remote Network Logon Followed by Suspicious PowerShell
+```
+
+The opportunity originated from HUNT-001 after controlled threat-hunting activity demonstrated that remote authentication followed by PowerShell execution provided significantly more investigative context than either event independently.
+
+---
+
+## Data Sources
+
+CORR-002 uses:
+
+| Event ID | Purpose |
+|---:|---|
+| 4624 | Successful Windows authentication |
+| 4104 | PowerShell Script Block Logging |
+
+The remote authentication portion additionally requires:
+
+```text
+Logon Type 3
+```
+
+and a non-local source IP.
+
+---
+
+## Remote Network Logon Condition
+
+The remote network component uses the tuned DET-006 methodology:
+
+```spl
+EventCode=4624
+LogonType=3
+```
+
+with exclusions for:
+
+```text
+-
+127.0.0.1
+::1
+```
+
+This limits the authentication population to remote network-logon candidates.
+
+---
+
+## PowerShell Condition
+
+PowerShell activity is identified using:
+
+```text
+Event ID 4104
+```
+
+The final correlation implementation intentionally does not depend on a specific extracted `Message` string.
+
+During engineering, filtering on strings such as:
+
+```text
+EncodedCommand
+FromBase64String
+Sprint29 CORR002
+```
+
+was found to be less reliable than correlating the underlying PowerShell event directly.
+
+---
+
+## Controlled Positive Test
+
+Controlled activity was generated using:
+
+```text
+Source:
+WIN11-01
+
+Target:
+WIN11-02
+```
+
+Remote authentication was generated using:
+
+```cmd
+net use \\WIN11-02\IPC$ /user:corp\tadmin *
+```
+
+PowerShell execution was then generated on WIN11-02 within the correlation window.
+
+The activity represented:
+
+```text
+Remote Network Logon
+        |
+        v
+PowerShell Execution
+```
+
+---
+
+## Initial Engineering Approach
+
+The first CORR-002 implementation used fixed 10-minute buckets:
+
+```spl
+| bin _time span=10m
+```
+
+This approach was rejected because events that occurred only a few minutes apart could fall into different fixed buckets.
+
+Example:
+
+```text
+4:09 PM — Remote Network Logon
+4:11 PM — PowerShell
+```
+
+Although the events are only two minutes apart, a fixed bucket boundary could prevent correlation.
+
+---
+
+## Diagnostic Investigation
+
+A temporary diagnostic query was used to confirm that both event types existed and were being classified correctly.
+
+The diagnostic demonstrated that Splunk could identify the relevant activity types, but fixed-window grouping and overly restrictive PowerShell filtering were preventing reliable correlation.
+
+This led to a redesigned correlation strategy.
+
+---
+
+## Final Correlation Strategy
+
+The final implementation uses chronological event processing.
+
+For each PowerShell event, Splunk identifies the most recent preceding remote network logon on the same host.
+
+The actual elapsed time between the events is then calculated.
+
+Conceptually:
+
+```text
+Remote Network Logon
+        |
+        v
+Store Logon Timestamp
+        |
+        v
+PowerShell Event
+        |
+        v
+Find Most Recent Prior Logon
+        |
+        v
+Calculate Time Difference
+        |
+        v
+<= 600 Seconds?
+     /       \
+   NO         YES
+   |           |
+Ignore      CORR-002
+```
+
+---
+
+## Final CORR-002 SPL
+
+```spl
+index=* ((EventCode=4624 AND LogonType=3) OR EventCode=4104)
+| where EventCode=4104 OR (EventCode=4624 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1")
+| eval activity=case(EventCode=4624,"network_logon",EventCode=4104,"powershell")
+| eval network_time=if(activity="network_logon",_time,null())
+| eval network_account=if(activity="network_logon",TargetUserName,null())
+| eval network_ip=if(activity="network_logon",IpAddress,null())
+| sort 0 host _time
+| streamstats last(network_time) as prior_network_time last(network_account) as prior_account last(network_ip) as prior_source_ip by host
+| where activity="powershell"
+| eval time_difference=_time-prior_network_time
+| where isnotnull(prior_network_time) AND time_difference>=0 AND time_difference<=600
+| eval correlation="CORR-002 - Remote Network Logon Followed by PowerShell"
+| eval risk=65
+| eval severity="HIGH"
+| eval powershell_time=_time
+| convert ctime(prior_network_time) ctime(powershell_time)
+| table host correlation severity risk prior_network_time powershell_time time_difference prior_account prior_source_ip
+```
+
+---
+
+## Correlation Window
+
+The maximum allowed elapsed time is:
+
+```text
+600 seconds
+```
+
+or:
+
+```text
+10 minutes
+```
+
+This is a lab-defined initial correlation window.
+
+---
+
+## Risk Model
+
+CORR-002 uses:
+
+```text
+Risk Score:
+65
+
+Severity:
+HIGH
+```
+
+This reflects the increased investigative significance of remote authentication followed by PowerShell execution on the same host.
+
+---
+
+## MITRE ATT&CK Mapping
+
+### Remote Authentication Component
+
+| Field | Value |
+|---|---|
+| Tactic | Lateral Movement |
+| Technique | T1021 — Remote Services |
+
+### PowerShell Component
+
+| Field | Value |
+|---|---|
+| Tactic | Execution |
+| Technique | T1059.001 — PowerShell |
+
+CORR-002 therefore provides cross-tactic correlation between remote access and execution.
+
+---
+
+## Positive Validation
+
+The controlled test produced:
+
+```text
+Remote Network Logon
+        |
+        | <= 600 seconds
+        v
+PowerShell
+```
+
+on the same endpoint.
+
+The final correlation logic identified the sequence.
+
+```text
+Positive Validation:
+PASS
+```
+
+---
+
+## Negative Validation Model
+
+CORR-002 is designed not to trigger when:
+
+```text
+Remote network logon occurs without subsequent PowerShell
+```
+
+or:
+
+```text
+PowerShell occurs without a preceding remote network logon
+```
+
+or:
+
+```text
+The activities occur on different endpoints
+```
+
+or:
+
+```text
+The elapsed time exceeds 600 seconds
+```
+
+---
+
+## False Positive Considerations
+
+Potential legitimate sequences include:
+
+```text
+Remote IT Administration
+        |
+        v
+PowerShell Troubleshooting
+```
+
+```text
+Helpdesk Remote Session
+        |
+        v
+PowerShell Diagnostics
+```
+
+```text
+Configuration Management
+        |
+        v
+PowerShell Automation
+```
+
+CORR-002 therefore represents a high-value investigative signal rather than proof of compromise.
+
+---
+
+## Analyst Workflow
+
+```text
+CORR-002 Triggered
+        |
+        v
+Identify Target Endpoint
+        |
+        v
+Identify Remote Source
+        |
+        v
+Identify Account
+        |
+        v
+Review Logon Type
+        |
+        v
+Review PowerShell Event
+        |
+        v
+Calculate Time Between Events
+        |
+        v
+Review Related Authentication
+        |
+        v
+Review Persistence
+        |
+        v
+Review Privilege Changes
+        |
+        v
+Determine Authorization
+        |
+        +----------------------+
+        |                      |
+        v                      v
+Authorized             Suspicious
+        |                      |
+        v                      v
+Document / Close       Investigate / Escalate
+```
+
+---
+
+## Detection Lifecycle
+
+Sprint 29 completed the lifecycle that began in Sprint 28:
+
+```text
+Threat Hunt
+    |
+    v
+HUNT-001
+    |
+    v
+HF-001
+    |
+    v
+DET-OPP-001
+    |
+    v
+Correlation Engineering
+    |
+    v
+CORR-002
+    |
+    v
+Validation
+    |
+    v
+Operational Analytic
+```
+
+---
+
+## Skills Demonstrated
+
+- Correlation engineering
+- Splunk SPL
+- `streamstats`
+- Event sequencing
+- Relative-time correlation
+- Authentication analysis
+- PowerShell analysis
+- Cross-tactic correlation
+- Positive validation
+- Negative-test design
+- Detection opportunity promotion
+- Risk scoring
+- MITRE ATT&CK mapping
+- SOC analyst workflow design
+
+---
+
+## Outcome
+
+Sprint 29 demonstrated how a threat-hunting finding can be promoted through detection engineering into an operational correlation analytic.
+
+```text
+HUNT-001
+    |
+    v
+HF-001
+    |
+    v
+DET-OPP-001
+    |
+    v
+CORR-002
+```
+
+**Sprint 29 Status: COMPLETE**
