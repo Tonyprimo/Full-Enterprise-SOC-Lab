@@ -1,0 +1,417 @@
+# CORR-001 — Analyst Response Workflow
+
+## Alert Metadata
+
+| Field | Value |
+|---|---|
+| Alert | CORR-001 — Multi-Stage Windows Attack Activity |
+| Severity | Critical |
+| Minimum Detection Count | 3 |
+| Correlation Window | 60 minutes |
+
+---
+
+## Purpose
+
+This workflow defines the analyst response process when CORR-001 identifies multiple suspicious Windows behaviors within the same investigation window.
+
+The objective is to determine whether the correlated activity represents:
+
+- Legitimate administration
+- Authorized security testing
+- A false positive
+- Suspicious activity requiring additional investigation
+- A confirmed incident requiring containment
+
+---
+
+## 1. Initial Triage
+
+Record:
+
+- Alert timestamp
+- Detection count
+- Total risk score
+- Severity
+- Associated hosts
+- Associated users
+- Source IP addresses
+- Detection categories
+- MITRE ATT&CK techniques
+
+---
+
+## 2. Reconstruct the Timeline
+
+Sort the correlated events chronologically.
+
+Sprint 25 validation produced:
+
+| Time | Detection | Activity |
+|---|---|---|
+| 5:32 PM | DET-002 | Repeated failed authentication |
+| 5:37 PM | DET-006 | Remote administrative SMB logon |
+| 5:43 PM | DET-003 | Encoded PowerShell execution |
+| 5:46 PM | DET-004 | Suspicious scheduled task creation |
+| 5:51 PM | DET-005 | Privileged domain group membership change |
+
+**Date:** August 20, 2026
+
+Attack progression:
+
+```text
+Authentication Failure
+        |
+        v
+Remote Administrative Access
+        |
+        v
+PowerShell Execution
+        |
+        v
+Persistence
+        |
+        v
+Privilege Modification
+```
+
+---
+
+## 3. Investigate DET-002
+
+### Repeated Failed Authentication
+
+Determine:
+
+- Target account
+- Source system
+- Source IP
+- Number of failures
+- Failure reason
+- Timing between attempts
+- Whether successful authentication followed
+
+Questions:
+
+```text
+Was the account being guessed?
+Did the failures originate from one host?
+Did a successful logon immediately follow?
+```
+
+---
+
+## 4. Investigate DET-006
+
+### Remote Administrative SMB Logon
+
+Determine:
+
+- Source host
+- Target host
+- Account used
+- Source IP
+- Logon type
+- Administrative share accessed
+- Whether peer-to-peer administration is expected
+
+Determine whether DET-006 followed DET-002.
+
+Potential sequence:
+
+```text
+Failed Logons
+      |
+      v
+Successful Remote Logon
+```
+
+---
+
+## 5. Investigate DET-003
+
+### Encoded PowerShell Execution
+
+Determine:
+
+- Host
+- User
+- PowerShell command
+- Script block
+- Encoded content
+- Execution timestamp
+- Parent process where available
+
+Determine whether the PowerShell execution followed the remote administrative session.
+
+Potential sequence:
+
+```text
+Remote Access
+     |
+     v
+Encoded PowerShell
+```
+
+---
+
+## 6. Investigate DET-004
+
+### Suspicious Scheduled Task Creation
+
+Determine:
+
+- Task name
+- Task action
+- Creator
+- Trigger
+- Execution context
+- Creation timestamp
+
+Determine whether the task was created shortly after suspicious PowerShell execution.
+
+Potential sequence:
+
+```text
+PowerShell
+    |
+    v
+Scheduled Task
+```
+
+---
+
+## 7. Investigate DET-005
+
+### Privileged Domain Group Membership Change
+
+Determine:
+
+- Account receiving membership
+- Privileged group modified
+- Actor performing the change
+- Domain controller
+- Timestamp
+- Authorization status
+
+Potential sequence:
+
+```text
+Suspicious Execution
+        |
+        v
+Persistence
+        |
+        v
+Privilege Modification
+```
+
+---
+
+## 8. MITRE ATT&CK Reconstruction
+
+Map the attack sequence:
+
+```text
+Credential Access
+T1110
+        |
+        v
+Lateral Movement
+T1021.002
+        |
+        v
+Execution
+T1059.001
+        |
+        v
+Persistence
+T1053.005
+        |
+        v
+Privilege Escalation / Persistence
+T1098.007
+```
+
+---
+
+## 9. Evaluate Risk
+
+Sprint 25 lab risk model:
+
+| Detection | Risk |
+|---|---:|
+| DET-002 | 20 |
+| DET-006 | 35 |
+| DET-003 | 30 |
+| DET-004 | 30 |
+| DET-005 | 40 |
+
+Full simulation:
+
+```text
+20 + 35 + 30 + 30 + 40 = 155
+```
+
+Severity:
+
+```text
+CRITICAL
+```
+
+Risk scoring supports prioritization but does not replace analyst judgment.
+
+---
+
+## 10. Determine Scope
+
+Search for related activity across:
+
+- Additional endpoints
+- Additional accounts
+- Additional domain controllers
+- Similar PowerShell commands
+- Additional scheduled tasks
+- Additional privileged-group changes
+- Additional remote logons
+- Related authentication failures
+
+Questions:
+
+```text
+Is the activity isolated to one endpoint?
+Was the account used elsewhere?
+Were additional persistence mechanisms created?
+Were other privileged accounts modified?
+```
+
+---
+
+## 11. Validate Authorization
+
+Determine whether the activity corresponds to:
+
+- Approved administrative work
+- Change-management activity
+- Security testing
+- Helpdesk activity
+- Software deployment
+- Planned maintenance
+
+If authorized:
+
+```text
+Validate
+   |
+   v
+Document
+   |
+   v
+Close
+```
+
+---
+
+## 12. Escalation Criteria
+
+Escalate when:
+
+- Activity cannot be validated
+- Credentials appear compromised
+- Multiple systems are affected
+- Encoded PowerShell is unexplained
+- Persistence is unauthorized
+- Privileged membership is unauthorized
+- Activity continues after initial detection
+- Additional related alerts are observed
+
+---
+
+## 13. Containment Considerations
+
+For a confirmed incident, response may include:
+
+- Disable compromised accounts
+- Remove unauthorized privileged membership
+- Remove malicious scheduled tasks
+- Isolate affected endpoints
+- Reset credentials
+- Review adjacent systems
+- Preserve relevant logs
+- Escalate to incident response
+
+Containment actions should follow organizational policy and authorization procedures.
+
+---
+
+## 14. Analyst Disposition — Sprint 25 Validation
+
+| Field | Value |
+|---|---|
+| Correlation | CORR-001 |
+| Detection Count | 5 |
+| Timeline Duration | Approximately 19 minutes |
+| Risk Score | 155 |
+| Severity | Critical |
+| Authorization | Authorized Security Simulation |
+| Disposition | Benign / Expected Lab Activity |
+| Escalation | Not Required |
+
+---
+
+## 15. Analyst Workflow Summary
+
+```text
+CORR-001 Triggered
+        |
+        v
+Identify Hosts and Accounts
+        |
+        v
+Reconstruct Timeline
+        |
+        v
+Review DET-002
+        |
+        v
+Review DET-006
+        |
+        v
+Review DET-003
+        |
+        v
+Review DET-004
+        |
+        v
+Review DET-005
+        |
+        v
+Calculate Risk
+        |
+        v
+Determine Scope
+        |
+        v
+Validate Authorization
+        |
+        +------------------------+
+        |                        |
+        v                        v
+Legitimate                  Suspicious
+        |                        |
+        v                        v
+Document / Close         Contain / Escalate
+```
+
+---
+
+## Workflow Status
+
+```text
+Timeline Reconstruction: COMPLETE
+MITRE Mapping:          COMPLETE
+Risk Assessment:        COMPLETE
+Positive Test:          PASS
+Negative Test:          PASS
+Analyst Workflow:       VALIDATED
+```
