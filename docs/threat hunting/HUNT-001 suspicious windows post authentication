@@ -1,0 +1,401 @@
+# HUNT-001 — Suspicious Windows Post-Authentication Activity
+
+**Status:** Complete 
+**Hunt ID:** HUNT-001 
+**Environment:** corp.lab 
+**SIEM:** Splunk Enterprise 
+**Finding:** HF-001 
+**Detection Opportunity:** DET-OPP-001
+
+---
+
+## Hypothesis
+
+```text
+If an account is being used for unauthorized access, suspicious
+activity may occur shortly after authentication, including PowerShell
+execution, persistence creation, or privileged account modification,
+even if no individual alert reaches its configured threshold.
+```
+
+---
+
+## Hunt Objective
+
+Identify suspicious Windows activity occurring after authentication by correlating authentication telemetry with execution, persistence, and privilege-modification events.
+
+The hunt focuses on relationships between events rather than treating each event as an independent indicator of compromise.
+
+---
+
+## Scope
+
+```text
+Environment:
+corp.lab
+
+Primary Platforms:
+Windows 11
+Windows Server
+
+SIEM:
+Splunk Enterprise
+
+Primary Hunt Areas:
+Authentication
+Remote Network Access
+PowerShell
+Persistence
+Privilege Modification
+```
+
+---
+
+## Data Sources
+
+| Event ID | Description | Hunt Purpose |
+|---:|---|---|
+| 4624 | Successful Logon | Identify successful authentication |
+| 4625 | Failed Logon | Identify authentication failures |
+| 4104 | PowerShell Script Block | Identify PowerShell execution |
+| 4698 | Scheduled Task Created | Identify persistence activity |
+| 4728 | Member Added to Security-Enabled Global Group | Identify privileged group changes |
+
+---
+
+## Hunt Methodology
+
+### Stage 1 — Authentication Baseline
+
+Establish normal successful authentication activity.
+
+```spl
+index=* EventCode=4624
+| stats count by host
+| sort - count
+```
+
+### Stage 2 — Network Authentication
+
+Identify successful network logons with remote source information.
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| sort _time
+| table _time host TargetUserName IpAddress WorkstationName LogonType
+```
+
+### Stage 3 — Authentication Sequence Analysis
+
+Review failures and successes chronologically.
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625)
+| eval auth_result=if(EventCode=4625,"FAILURE","SUCCESS")
+| sort _time
+| table _time host TargetUserName IpAddress LogonType auth_result
+```
+
+### Stage 4 — PowerShell Hunt
+
+Search for PowerShell characteristics that warrant analyst review.
+
+```spl
+index=* EventCode=4104
+("EncodedCommand" OR "FromBase64String" OR "Invoke-" OR "DownloadString" OR "Hidden")
+| sort _time
+| table _time host Message
+```
+
+### Stage 5 — Persistence Hunt
+
+```spl
+index=* EventCode=4698
+| sort _time
+| table _time host SubjectUserName TaskName
+```
+
+Alternate search:
+
+```spl
+index=* ("schtasks.exe" OR "Register-ScheduledTask")
+| sort _time
+| table _time host _raw
+```
+
+### Stage 6 — Privilege Modification Hunt
+
+```spl
+index=* EventCode=4728
+| sort _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+---
+
+## Controlled Validation
+
+A controlled test was used to validate HUNT-001.
+
+### Remote Network Authentication
+
+Source:
+
+```text
+WIN11-01
+```
+
+Target:
+
+```text
+WIN11-02
+```
+
+Account:
+
+```text
+corp\tadmin
+```
+
+Command:
+
+```cmd
+net use \\WIN11-02\IPC$ /user:corp\tadmin *
+```
+
+### PowerShell Activity
+
+The following controlled PowerShell activity was generated on WIN11-02:
+
+```powershell
+$cmd='Write-Output "Sprint28 HUNT001 Test"'
+```
+
+```powershell
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+```
+
+```powershell
+powershell.exe -EncodedCommand $encoded
+```
+
+Expected output:
+
+```text
+Sprint28 HUNT001 Test
+```
+
+---
+
+## Timeline Hunt
+
+The authentication and PowerShell telemetry were combined using:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4104)
+| eval activity=case(
+EventCode=4624 AND LogonType=3,"Network Logon",
+EventCode=4104,"PowerShell",
+true(),"Other")
+| where activity!="Other"
+| sort _time
+| table _time host EventCode activity TargetUserName IpAddress
+```
+
+This allowed the analyst to review post-authentication activity chronologically.
+
+---
+
+## HF-001 — Remote Authentication Followed by PowerShell
+
+### Finding
+
+```text
+Remote network authentication was followed by PowerShell execution
+on the target Windows endpoint.
+```
+
+### Systems
+
+```text
+Source:
+WIN11-01
+
+Target:
+WIN11-02
+```
+
+### Associated Telemetry
+
+```text
+Event ID 4624
+Logon Type 3
+
+Event ID 4104
+PowerShell Script Block Logging
+```
+
+### Disposition
+
+```text
+Authorized Security Simulation
+```
+
+---
+
+## Finding Analysis
+
+The individual behaviors do not independently establish compromise.
+
+### Network Authentication
+
+```text
+4624 + Logon Type 3
+```
+
+establishes successful network authentication.
+
+It does not independently establish malicious lateral movement.
+
+### PowerShell
+
+```text
+4104
+```
+
+provides visibility into PowerShell execution.
+
+PowerShell itself is a legitimate Windows administration technology.
+
+### Combined Context
+
+The relationship:
+
+```text
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+```
+
+provides more investigative value than either event evaluated independently.
+
+---
+
+## Hunt Outcome
+
+```text
+Hypothesis:
+SUPPORTED BY CONTROLLED VALIDATION
+
+Finding:
+HF-001
+
+Malicious Activity Confirmed:
+NO
+
+Authorized Activity:
+YES
+
+Detection Opportunity Identified:
+YES
+
+Detection Opportunity:
+DET-OPP-001
+
+Status:
+COMPLETE
+```
+
+---
+
+## Detection Opportunity
+
+HUNT-001 identified an opportunity to detect:
+
+```text
+Remote Network Logon
+        |
+        | Short Time Window
+        v
+Suspicious PowerShell Execution
+```
+
+This candidate was recorded as:
+
+```text
+DET-OPP-001 — Remote Network Logon Followed by Suspicious PowerShell
+```
+
+The candidate requires separate engineering and validation before promotion to a production detection.
+
+---
+
+## Coverage Assessment
+
+| Behavior | Coverage |
+|---|---|
+| Authentication failures | Covered where telemetry is available |
+| Successful network authentication | Covered |
+| PowerShell execution | Covered |
+| Scheduled task creation | Partial |
+| Privileged group changes | Covered |
+| Cross-event temporal analysis | Covered |
+
+---
+
+## Limitations
+
+HUNT-001 has several intentional limitations.
+
+Event ID 4624 with Logon Type 3 establishes network authentication but does not independently establish malicious remote access.
+
+Event ID 4104 identifies PowerShell script activity but does not independently establish malicious execution.
+
+Scheduled-task telemetry has demonstrated inconsistent historical availability within the lab.
+
+The hunt therefore requires analyst context and should not treat individual matching events as proof of compromise.
+
+---
+
+## Hunt Lifecycle
+
+```text
+Hypothesis
+    |
+    v
+Data Selection
+    |
+    v
+Baseline
+    |
+    v
+Hunting Queries
+    |
+    v
+Cross-Telemetry Pivot
+    |
+    v
+HF-001
+    |
+    v
+Detection Opportunity
+    |
+    v
+DET-OPP-001
+```
+
+---
+
+## Final Status
+
+```text
+Hunt ID:               HUNT-001
+Hypothesis Tested:     YES
+Controlled Validation: COMPLETE
+Finding Created:       HF-001
+Detection Opportunity: DET-OPP-001
+Disposition:           Authorized Security Simulation
+Status:                COMPLETE
+```
