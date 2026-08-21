@@ -1,0 +1,393 @@
+# Sprint 27 — Detection Tuning and False-Positive Reduction
+
+**Status:** Complete 
+**Primary Detection:** DET-006 
+**Tuning Record:** TUNE-001 
+**Environment:** corp.lab 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Sprint 27 introduced formal detection tuning and false-positive reduction into the SOC lab.
+
+During the INC-001 investigation in Sprint 26, DET-006 was identified as overly broad because its original logic relied heavily on Windows Security Event ID 4624.
+
+Event ID 4624 represents a successful Windows logon and occurs frequently during normal Windows activity.
+
+The objective of Sprint 27 was to:
+
+- Analyze the existing DET-006 logic
+- Establish a baseline for Event ID 4624 activity
+- Analyze Windows logon types
+- Generate controlled remote network activity
+- Validate Logon Type 3 telemetry
+- Reduce unrelated authentication results
+- Improve the accuracy of DET-006
+- Perform positive and negative validation
+- Update the Splunk detection
+- Close TUNE-001
+
+---
+
+## Background
+
+The original DET-006 logic broadly searched for:
+
+```spl
+EventCode=4624
+```
+
+This created a detection-engineering problem.
+
+Event ID 4624 indicates successful authentication, but successful authentication alone does not prove remote administrative SMB activity.
+
+Normal Windows operations can generate Event ID 4624 for:
+
+- Interactive logons
+- Network logons
+- Service activity
+- Computer accounts
+- Domain authentication
+- Administrative activity
+- Normal system communication
+
+Sprint 26 therefore created:
+
+```text
+TUNE-001 — DET-006 Remote Administrative SMB Logon Refinement
+```
+
+---
+
+## Baseline Analysis
+
+The original DET-006 search was reviewed using:
+
+```spl
+index=* EventCode=4624
+| table _time host TargetUserName IpAddress WorkstationName LogonType
+| sort - _time
+```
+
+The results demonstrated that Event ID 4624 contained multiple forms of legitimate authentication activity.
+
+This confirmed that:
+
+```text
+EventCode=4624
+```
+
+was too broad to serve as the sole condition for DET-006.
+
+---
+
+## Logon Type Analysis
+
+Successful authentication events were grouped by Logon Type:
+
+```spl
+index=* EventCode=4624
+| stats count by LogonType
+| sort - count
+```
+
+The investigation focused on:
+
+```text
+LogonType = 3
+```
+
+Windows Logon Type 3 represents a network logon.
+
+This provided substantially better context for remote network activity than Event ID 4624 alone.
+
+---
+
+## Controlled Positive Test
+
+Controlled remote network activity was generated between:
+
+```text
+Source:
+WIN11-01
+
+Destination:
+WIN11-02
+
+Account:
+corp\tadmin
+
+Resource:
+\\WIN11-02\IPC$
+```
+
+The connection was generated using:
+
+```cmd
+net use \\WIN11-02\IPC$ /user:corp\tadmin *
+```
+
+The resulting authentication telemetry was investigated in Splunk.
+
+The test confirmed that remote network authentication could be identified using:
+
+```text
+Event ID 4624
++
+Logon Type 3
++
+Remote Source Context
+```
+
+---
+
+## Detection Scope Analysis
+
+An important distinction was identified during tuning:
+
+```text
+Event ID 4624 + Logon Type 3
+```
+
+proves a network logon occurred.
+
+It does not, by itself, prove that a specific administrative SMB share was accessed.
+
+This distinction was incorporated into the final DET-006 design so that the detection does not claim more than the available telemetry proves.
+
+---
+
+## Refined Detection Logic
+
+The tuned base logic became:
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| eval detection_id="DET-006"
+| eval detection_name="Suspicious Remote Network Logon"
+| eval mitre_tactic="Lateral Movement"
+| eval mitre_technique="T1021"
+| table _time host TargetUserName IpAddress WorkstationName LogonType detection_id detection_name mitre_tactic mitre_technique
+| sort - _time
+```
+
+The updated logic:
+
+1. Requires successful authentication.
+2. Requires a network logon.
+3. Removes empty source addresses.
+4. Removes IPv4 loopback activity.
+5. Removes IPv6 loopback activity.
+6. Preserves source and account context for investigation.
+
+---
+
+## Old vs. Tuned Logic
+
+### Original
+
+```spl
+index=* EventCode=4624
+```
+
+### Tuned
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+```
+
+Conceptually:
+
+```text
+ALL SUCCESSFUL LOGONS
+        |
+        v
+Event ID 4624
+        |
+        v
+Network Logons Only
+Logon Type 3
+        |
+        v
+Remove Empty Sources
+        |
+        v
+Remove Loopback Sources
+        |
+        v
+Remote Network Authentication Candidates
+```
+
+---
+
+## Positive Validation
+
+A controlled remote network connection was generated from WIN11-01 to WIN11-02.
+
+The resulting network authentication remained visible after applying the tuned DET-006 logic.
+
+```text
+Positive Validation:
+PASS
+```
+
+This demonstrated that the tuning did not eliminate the activity DET-006 was intended to detect.
+
+---
+
+## Negative Validation
+
+Normal successful Windows authentication was compared against the tuned detection.
+
+Authentication that did not meet the remote network criteria was excluded from DET-006.
+
+```text
+Negative Validation:
+PASS
+```
+
+The tuning therefore improved specificity while retaining the intended detection capability.
+
+---
+
+## False-Positive Reduction
+
+The primary source of noise was:
+
+```text
+All Event ID 4624 successful authentication events
+```
+
+The tuned detection reduced this population to:
+
+```text
+Event ID 4624
+AND
+Logon Type 3
+AND
+Non-local source address
+```
+
+This reduced unrelated successful-authentication activity presented to the analyst.
+
+Exact baseline and tuned event counts were not retained in the sprint record and are therefore not represented here.
+
+---
+
+## Detection Naming Improvement
+
+The investigation demonstrated an important detection-engineering principle:
+
+> A detection should not claim more than its telemetry can prove.
+
+Without supporting share-access telemetry, Event ID 4624 with Logon Type 3 establishes a remote network logon but does not independently establish administrative-share access.
+
+DET-006 was therefore refined to accurately represent the observable behavior:
+
+```text
+DET-006 — Suspicious Remote Network Logon
+```
+
+---
+
+## MITRE ATT&CK Mapping
+
+| Field | Value |
+|---|---|
+| Detection | DET-006 |
+| Tactic | Lateral Movement |
+| Technique | T1021 — Remote Services |
+
+The detection identifies network authentication behavior that can contribute to lateral-movement investigations.
+
+Additional protocol-specific telemetry would be required to confidently map the activity to a more specific remote-service sub-technique.
+
+---
+
+## TUNE-001 Resolution
+
+```text
+Tuning ID:
+TUNE-001
+
+Detection:
+DET-006
+
+Original Problem:
+Event ID 4624 alone produced excessive unrelated successful-authentication activity.
+
+Resolution:
+Restricted the detection to Logon Type 3 network authentication and removed empty and loopback source addresses.
+
+Positive Validation:
+PASS
+
+Negative Validation:
+PASS
+
+Status:
+CLOSED
+```
+
+---
+
+## Skills Demonstrated
+
+- Detection engineering
+- Detection tuning
+- Splunk SPL
+- Windows authentication analysis
+- False-positive reduction
+- Positive validation
+- Negative validation
+- Detection scope analysis
+- Detection naming
+- MITRE ATT&CK mapping
+- SOC alert optimization
+- Network authentication analysis
+- Detection lifecycle management
+
+---
+
+## Outcome
+
+Sprint 27 introduced a formal detection-improvement lifecycle into the SOC lab.
+
+```text
+Detection
+    |
+    v
+Incident Investigation
+    |
+    v
+Detection Weakness Identified
+    |
+    v
+Tuning Ticket
+    |
+    v
+Baseline Analysis
+    |
+    v
+Detection Refinement
+    |
+    v
+Positive Validation
+    |
+    v
+Negative Validation
+    |
+    v
+Updated Detection
+    |
+    v
+Tuning Ticket Closed
+```
+
+DET-006 progressed from a broad successful-logon search into a more specific remote network authentication analytic.
+
+**Sprint 27 Status: COMPLETE**
