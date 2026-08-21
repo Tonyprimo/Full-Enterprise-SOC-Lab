@@ -1,0 +1,392 @@
+# CORR-002 — Remote Network Logon Followed by PowerShell
+
+**Status:** Validated 
+**Correlation ID:** CORR-002 
+**Severity:** High 
+**Risk Score:** 65 
+**Source Opportunity:** DET-OPP-001 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Purpose
+
+CORR-002 identifies PowerShell activity occurring shortly after a successful remote Windows network logon on the same endpoint.
+
+The analytic combines authentication and execution telemetry to provide higher-value investigative context than either event provides independently.
+
+---
+
+## Detection Concept
+
+```text
+Remote Network Logon
+        |
+        | Within 10 Minutes
+        v
+PowerShell Execution
+        |
+        v
+CORR-002
+```
+
+---
+
+## Required Telemetry
+
+### Network Authentication
+
+```text
+Event ID:
+4624
+
+Logon Type:
+3
+
+Source:
+Non-local IP
+```
+
+### PowerShell
+
+```text
+Event ID:
+4104
+```
+
+---
+
+## Correlation Key
+
+The primary correlation key is:
+
+```text
+host
+```
+
+For the network-logon event, `host` represents the endpoint receiving the authentication.
+
+For the PowerShell event, `host` represents the endpoint executing PowerShell.
+
+CORR-002 therefore requires both behaviors to occur on the same monitored endpoint.
+
+---
+
+## Correlation Window
+
+```text
+10 minutes
+```
+
+Equivalent to:
+
+```text
+600 seconds
+```
+
+The PowerShell event must occur after the remote network logon.
+
+---
+
+## Final SPL
+
+```spl
+index=* ((EventCode=4624 AND LogonType=3) OR EventCode=4104)
+| where EventCode=4104 OR (EventCode=4624 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1")
+| eval activity=case(EventCode=4624,"network_logon",EventCode=4104,"powershell")
+| eval network_time=if(activity="network_logon",_time,null())
+| eval network_account=if(activity="network_logon",TargetUserName,null())
+| eval network_ip=if(activity="network_logon",IpAddress,null())
+| sort 0 host _time
+| streamstats last(network_time) as prior_network_time last(network_account) as prior_account last(network_ip) as prior_source_ip by host
+| where activity="powershell"
+| eval time_difference=_time-prior_network_time
+| where isnotnull(prior_network_time) AND time_difference>=0 AND time_difference<=600
+| eval correlation="CORR-002 - Remote Network Logon Followed by PowerShell"
+| eval risk=65
+| eval severity="HIGH"
+| eval powershell_time=_time
+| convert ctime(prior_network_time) ctime(powershell_time)
+| table host correlation severity risk prior_network_time powershell_time time_difference prior_account prior_source_ip
+```
+
+---
+
+## Logic Breakdown
+
+### Step 1 — Collect Required Events
+
+```spl
+index=* ((EventCode=4624 AND LogonType=3) OR EventCode=4104)
+```
+
+Collects:
+
+```text
+Remote network authentication candidates
++
+PowerShell Script Block events
+```
+
+---
+
+### Step 2 — Remove Local Authentication Sources
+
+```spl
+| where EventCode=4104 OR (EventCode=4624 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1")
+```
+
+This retains all PowerShell events while restricting network-logon candidates to non-local source addresses.
+
+---
+
+### Step 3 — Classify Activity
+
+```spl
+| eval activity=case(EventCode=4624,"network_logon",EventCode=4104,"powershell")
+```
+
+---
+
+### Step 4 — Preserve Network Context
+
+```spl
+| eval network_time=if(activity="network_logon",_time,null())
+| eval network_account=if(activity="network_logon",TargetUserName,null())
+| eval network_ip=if(activity="network_logon",IpAddress,null())
+```
+
+This preserves:
+
+```text
+Network-logon timestamp
+Target account
+Remote source IP
+```
+
+---
+
+### Step 5 — Order Events
+
+```spl
+| sort 0 host _time
+```
+
+Events are ordered chronologically for each endpoint.
+
+---
+
+### Step 6 — Carry Forward Most Recent Network Logon
+
+```spl
+| streamstats last(network_time) as prior_network_time last(network_account) as prior_account last(network_ip) as prior_source_ip by host
+```
+
+For each event, Splunk retains the most recent preceding remote network-logon context for that host.
+
+---
+
+### Step 7 — Evaluate PowerShell Events
+
+```spl
+| where activity="powershell"
+```
+
+Only PowerShell events proceed to correlation evaluation.
+
+---
+
+### Step 8 — Calculate Elapsed Time
+
+```spl
+| eval time_difference=_time-prior_network_time
+```
+
+---
+
+### Step 9 — Enforce Correlation Window
+
+```spl
+| where isnotnull(prior_network_time) AND time_difference>=0 AND time_difference<=600
+```
+
+CORR-002 only triggers when PowerShell occurs:
+
+```text
+After the network logon
+AND
+Within 600 seconds
+```
+
+---
+
+## Why Fixed Buckets Were Rejected
+
+An earlier implementation used:
+
+```spl
+| bin _time span=10m
+```
+
+This created artificial boundary conditions.
+
+Example:
+
+```text
+4:09 PM — Network Logon
+4:11 PM — PowerShell
+```
+
+Although only two minutes apart, the events could fall into different fixed time buckets.
+
+The final `streamstats` implementation evaluates actual event ordering and elapsed time.
+
+---
+
+## Positive Validation
+
+Controlled activity generated:
+
+```text
+WIN11-01
+    |
+    v
+Remote Network Logon
+    |
+    v
+WIN11-02
+    |
+    v
+PowerShell
+```
+
+The sequence occurred within the configured correlation window.
+
+```text
+Result:
+PASS
+```
+
+---
+
+## Negative Validation Criteria
+
+### Network Logon Only
+
+Expected:
+
+```text
+No CORR-002
+```
+
+### PowerShell Only
+
+Expected:
+
+```text
+No CORR-002
+```
+
+### Different Hosts
+
+Expected:
+
+```text
+No CORR-002
+```
+
+### Outside 10-Minute Window
+
+Expected:
+
+```text
+No CORR-002
+```
+
+---
+
+## Risk & Severity
+
+```text
+Risk:
+65
+
+Severity:
+HIGH
+```
+
+---
+
+## MITRE ATT&CK
+
+### Lateral Movement
+
+```text
+T1021 — Remote Services
+```
+
+### Execution
+
+```text
+T1059.001 — PowerShell
+```
+
+---
+
+## Analyst Triage
+
+When CORR-002 triggers, determine:
+
+1. Which endpoint received the remote network logon?
+2. Which source IP initiated the authentication?
+3. Which account authenticated?
+4. Was the source expected?
+5. How many seconds later did PowerShell execute?
+6. What PowerShell activity occurred?
+7. Was the execution authorized?
+8. Did additional remote authentication occur?
+9. Was persistence created?
+10. Were privileged accounts modified?
+11. Did the source authenticate to other endpoints?
+12. Are additional detections associated with the same account or host?
+
+---
+
+## Potential False Positives
+
+Legitimate examples include:
+
+- Remote administration
+- Helpdesk activity
+- PowerShell troubleshooting
+- PowerShell-based configuration management
+- Software deployment
+- Security testing
+- Automated maintenance
+
+Therefore:
+
+```text
+Remote Network Logon
++
+PowerShell
+!=
+Confirmed Compromise
+```
+
+---
+
+## Correlation Status
+
+```text
+Correlation ID:       CORR-002
+Engineering:          COMPLETE
+Same-Host Correlation: IMPLEMENTED
+Relative-Time Logic:  IMPLEMENTED
+Correlation Window:   600 seconds
+Risk Score:           65
+Severity:             HIGH
+Positive Validation:  PASS
+Source Opportunity:   DET-OPP-001
+Status:               VALIDATED
+```
