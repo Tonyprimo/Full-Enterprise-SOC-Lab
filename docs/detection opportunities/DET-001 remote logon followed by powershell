@@ -1,9 +1,10 @@
 # DET-OPP-001 — Remote Network Logon Followed by Suspicious PowerShell
 
-**Status:** Candidate 
+**Status:** Implemented 
 **Opportunity ID:** DET-OPP-001 
 **Source Hunt:** HUNT-001 
 **Source Finding:** HF-001 
+**Implemented As:** CORR-002 
 **Environment:** corp.lab 
 **SIEM:** Splunk Enterprise
 
@@ -11,34 +12,77 @@
 
 ## Summary
 
-DET-OPP-001 was identified during HUNT-001 — Suspicious Windows Post-Authentication Activity.
+DET-OPP-001 originated during HUNT-001 — Suspicious Windows Post-Authentication Activity.
 
-The threat hunt demonstrated that remote network authentication followed by PowerShell execution provides substantially more investigative context than either behavior evaluated independently.
-
-DET-OPP-001 proposes converting this hunt finding into a future correlation detection.
-
----
-
-## Detection Concept
-
-Identify:
+The threat hunt identified a relationship between:
 
 ```text
-Successful Remote Network Logon
-        |
-        | Within 10 Minutes
-        v
-Suspicious PowerShell Execution
+Remote Network Authentication
         |
         v
-Same Target Endpoint
+PowerShell Execution
+```
+
+on the same Windows endpoint.
+
+The activity was documented as HF-001 and promoted into a formal detection opportunity.
+
+Sprint 29 completed engineering and implemented the opportunity as:
+
+```text
+CORR-002 — Remote Network Logon Followed by PowerShell
 ```
 
 ---
 
-## Detection Conditions
+## Detection Opportunity Lifecycle
 
-### Condition 1 — Remote Network Authentication
+```text
+HUNT-001
+    |
+    v
+HF-001
+    |
+    v
+DET-OPP-001
+Candidate
+    |
+    v
+Correlation Engineering
+    |
+    v
+CORR-002
+    |
+    v
+Validation
+    |
+    v
+DET-OPP-001
+Implemented
+```
+
+---
+
+## Original Detection Concept
+
+The proposed analytic was:
+
+```text
+Remote Network Logon
+        |
+        | Within 10 Minutes
+        v
+Suspicious PowerShell
+        |
+        v
+Same Endpoint
+```
+
+---
+
+## Required Telemetry
+
+### Authentication
 
 ```text
 Event ID:
@@ -48,288 +92,233 @@ Logon Type:
 3
 
 Source:
-Non-local IP address
+Non-local IP
 ```
 
-Base SPL:
-
-```spl
-index=* EventCode=4624 LogonType=3
-| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
-```
-
-### Condition 2 — PowerShell Execution
+### Execution
 
 ```text
 Event ID:
 4104
 ```
 
-Candidate suspicious characteristics include:
+---
+
+## Engineering Findings
+
+The initial engineering approach attempted to:
+
+1. Classify remote network logons.
+2. Classify PowerShell events.
+3. Place both events into fixed 10-minute buckets.
+4. Trigger when both activity types existed in the same bucket.
+
+The fixed-bucket approach proved unreliable because events occurring only minutes apart could fall into different time buckets.
+
+The engineering process also demonstrated that filtering PowerShell based on specific extracted `Message` strings was less reliable than using Event ID 4104 directly for the correlation layer.
+
+---
+
+## Final Implementation Strategy
+
+The implemented correlation uses chronological processing.
 
 ```text
-EncodedCommand
-FromBase64String
-Invoke-
-DownloadString
-Hidden
+Network Logon
+    |
+    v
+Record Timestamp
+    |
+    v
+PowerShell Event
+    |
+    v
+Retrieve Most Recent Prior Network Logon
+    |
+    v
+Calculate Elapsed Time
+    |
+    v
+<= 600 Seconds
+    |
+    v
+CORR-002
 ```
 
-Base SPL:
+---
+
+## Implemented SPL
 
 ```spl
-index=* EventCode=4104
-("EncodedCommand" OR "FromBase64String" OR "Invoke-" OR "DownloadString" OR "Hidden")
+index=* ((EventCode=4624 AND LogonType=3) OR EventCode=4104)
+| where EventCode=4104 OR (EventCode=4624 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1")
+| eval activity=case(EventCode=4624,"network_logon",EventCode=4104,"powershell")
+| eval network_time=if(activity="network_logon",_time,null())
+| eval network_account=if(activity="network_logon",TargetUserName,null())
+| eval network_ip=if(activity="network_logon",IpAddress,null())
+| sort 0 host _time
+| streamstats last(network_time) as prior_network_time last(network_account) as prior_account last(network_ip) as prior_source_ip by host
+| where activity="powershell"
+| eval time_difference=_time-prior_network_time
+| where isnotnull(prior_network_time) AND time_difference>=0 AND time_difference<=600
+| eval correlation="CORR-002 - Remote Network Logon Followed by PowerShell"
+| eval risk=65
+| eval severity="HIGH"
+| eval powershell_time=_time
+| convert ctime(prior_network_time) ctime(powershell_time)
+| table host correlation severity risk prior_network_time powershell_time time_difference prior_account prior_source_ip
 ```
 
 ---
 
-## Proposed Correlation
-
-The candidate detection should correlate:
+## Implemented Correlation
 
 ```text
-4624 / Logon Type 3
-        +
-Remote Source
-        |
-        | Same Endpoint
-        | Within 10 Minutes
-        v
-4104
-Suspicious PowerShell
-```
+Correlation ID:
+CORR-002
 
-The relationship should be evaluated on the target endpoint.
+Name:
+Remote Network Logon Followed by PowerShell
 
----
+Correlation Key:
+host
 
-## Why Correlation Matters
+Maximum Time Difference:
+600 seconds
 
-### Network Logon Alone
+Risk:
+65
 
-```text
-Remote network authentication
-```
-
-may represent legitimate:
-
-- Administration
-- File access
-- Domain operations
-- Support activity
-- Automated services
-
-### PowerShell Alone
-
-```text
-PowerShell execution
-```
-
-may represent legitimate:
-
-- Administration
-- Troubleshooting
-- Automation
-- Configuration management
-
-### Combined Behavior
-
-```text
-Remote Network Authentication
-        |
-        v
-Suspicious PowerShell
-```
-
-within a short period on the same endpoint provides stronger evidence of potential post-authentication activity.
-
----
-
-## Source Hunt Evidence
-
-HUNT-001 generated a controlled sequence involving:
-
-```text
-Source:
-WIN11-01
-
-Target:
-WIN11-02
-
-Authentication:
-Remote network authentication
-
-Execution:
-Encoded PowerShell
-```
-
-The hunt successfully identified both behaviors and reconstructed their relationship.
-
-This produced:
-
-```text
-HF-001
-```
-
-and subsequently:
-
-```text
-DET-OPP-001
-```
-
----
-
-## Proposed Time Window
-
-Initial candidate window:
-
-```text
-10 minutes
-```
-
-This value is not yet considered production validated.
-
-Future testing should determine whether:
-
-```text
-5 minutes
-10 minutes
-15 minutes
-```
-
-provides the best balance between detection coverage and unrelated event correlation.
-
----
-
-## Proposed MITRE ATT&CK Coverage
-
-### Remote Access Component
-
-```text
-Tactic:
-Lateral Movement
-
-Technique:
-T1021 — Remote Services
-```
-
-### PowerShell Component
-
-```text
-Tactic:
-Execution
-
-Technique:
-T1059.001 — PowerShell
-```
-
-The candidate therefore provides cross-tactic visibility into potential remote access followed by execution.
-
----
-
-## Proposed Severity
-
-Initial candidate severity:
-
-```text
+Severity:
 HIGH
 ```
 
-Rationale:
+---
 
-The combination of remote network authentication and suspicious PowerShell execution may indicate post-authentication execution or lateral movement.
+## MITRE ATT&CK Coverage
 
-Severity must be validated during detection engineering and should not be finalized solely from the threat-hunt result.
+### Remote Authentication
+
+| Field | Value |
+|---|---|
+| Tactic | Lateral Movement |
+| Technique | T1021 — Remote Services |
+
+### PowerShell
+
+| Field | Value |
+|---|---|
+| Tactic | Execution |
+| Technique | T1059.001 — PowerShell |
 
 ---
 
-## Required Validation
-
-DET-OPP-001 should not become a production detection until it passes structured testing.
+## Validation
 
 ### Positive Test
-
-Generate:
 
 ```text
 Remote network authentication
         |
         v
-Encoded or otherwise suspicious PowerShell
+PowerShell execution
 ```
 
-on the same endpoint within the correlation window.
-
-Expected:
+occurred on the same endpoint within the configured window.
 
 ```text
-DET-OPP-001 candidate triggers
+Result:
+PASS
 ```
 
-### Negative Test 1
+### Negative-Test Requirements
 
-Generate remote network authentication without suspicious PowerShell.
+The correlation is designed not to trigger when:
 
-Expected:
+- Only remote network authentication occurs
+- Only PowerShell occurs
+- The events occur on different hosts
+- PowerShell occurs more than 600 seconds after the network logon
 
-```text
-No trigger
+---
+
+## Detection Engineering Lessons
+
+### 1. Hunt Findings Require Engineering
+
+HF-001 identified an interesting behavioral relationship, but the hunt query itself was not automatically suitable as a production analytic.
+
+### 2. Fixed Time Buckets Can Create Boundary Problems
+
+```spl
+bin _time span=10m
 ```
 
-### Negative Test 2
+was simple but did not represent true relative-time correlation.
 
-Generate suspicious PowerShell without preceding remote network authentication.
+### 3. Correlation Should Follow Event Order
 
-Expected:
+The implemented analytic explicitly requires:
 
 ```text
-No correlated trigger
+Network Logon
+BEFORE
+PowerShell
 ```
 
-### Negative Test 3
+### 4. Detection Opportunities Should Be Validated Before Promotion
 
-Generate both behaviors on different endpoints.
+DET-OPP-001 remained a candidate until:
 
-Expected:
+- Correlation logic was developed
+- Same-host correlation was implemented
+- Relative-time logic was implemented
+- Controlled positive validation succeeded
 
-```text
-No correlated trigger
-```
+---
 
-### Time-Window Test
-
-Generate both behaviors outside the configured correlation window.
-
-Expected:
+## Promotion Status
 
 ```text
-No correlated trigger
+Opportunity ID:
+DET-OPP-001
+
+Original Status:
+CANDIDATE
+
+Source:
+HUNT-001 / HF-001
+
+Implemented As:
+CORR-002
+
+Engineering:
+COMPLETE
+
+Correlation Key:
+host
+
+Relative-Time Correlation:
+IMPLEMENTED
+
+Correlation Window:
+600 seconds
+
+Positive Validation:
+PASS
+
+Current Status:
+IMPLEMENTED
 ```
 
 ---
 
-## Engineering Requirements
-
-Before promotion, the detection requires:
-
-- SPL correlation logic
-- Same-host correlation
-- Time-window enforcement
-- Positive validation
-- Negative validation
-- Noise analysis
-- Severity validation
-- MITRE ATT&CK validation
-- Analyst triage guidance
-- Splunk implementation
-- Documentation
-
----
-
-## Promotion Workflow
+## Final Lifecycle
 
 ```text
+Threat Hunting
+    |
+    v
 HUNT-001
     |
     v
@@ -342,80 +331,12 @@ DET-OPP-001
 Detection Engineering
     |
     v
-Positive Testing
+CORR-002
     |
     v
-Negative Testing
-    |
-    v
-Noise Analysis
-    |
-    v
-Tuning
-    |
-    v
-Validated Detection
+Validated Correlation
 ```
 
----
+DET-OPP-001 is no longer a pending detection opportunity.
 
-## Promotion Criteria
-
-DET-OPP-001 can be promoted from `Candidate` when:
-
-```text
-[ ] Correlation SPL developed
-[ ] Same-host correlation validated
-[ ] Time window validated
-[ ] Positive test passed
-[ ] Remote-logon-only negative test passed
-[ ] PowerShell-only negative test passed
-[ ] Different-host negative test passed
-[ ] Outside-window negative test passed
-[ ] False-positive risk evaluated
-[ ] MITRE mapping finalized
-[ ] Severity finalized
-[ ] Analyst triage procedure documented
-[ ] Splunk detection created
-```
-
----
-
-## Current Status
-
-```text
-Opportunity ID:
-DET-OPP-001
-
-Source:
-HUNT-001 / HF-001
-
-Detection Concept:
-Remote Network Logon Followed by Suspicious PowerShell
-
-Candidate Time Window:
-10 Minutes
-
-Candidate Severity:
-High
-
-Engineering:
-PENDING
-
-Validation:
-PENDING
-
-Production Detection:
-NOT CREATED
-
-Status:
-CANDIDATE
-```
-
----
-
-## Next Action
-
-Develop and validate correlation logic capable of identifying remote network authentication followed by suspicious PowerShell execution on the same endpoint within a defined time window.
-
-DET-OPP-001 should remain a candidate until that engineering and validation process is complete.
+**Status: IMPLEMENTED**
