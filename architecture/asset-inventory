@@ -8,5 +8,5 @@
 | WIN11-02 | Corporate Workstation | Windows 11 Enterprise | corp.lab | Active |
 | KALI01 | Adversary Simulation | Kali Linux | N/A | Active |
 | FW01 | Firewall / Router | pfSense | N/A | Active |
-| IDS01 | Network IDS | TBD | N/A | Planned |
+| IDS01 | Network IDS | TBD | N/A | Future |
 | LINUX01 | Enterprise Linux Server | Ubuntu Server | corp.lab | Future |
