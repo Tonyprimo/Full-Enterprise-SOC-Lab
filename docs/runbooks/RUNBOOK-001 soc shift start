@@ -1,0 +1,564 @@
+# RUNBOOK-001 — SOC Shift Start
+
+**Status:** Active 
+**Runbook ID:** RUNBOOK-001 
+**Associated Dashboard:** SOC-OPS-001 
+**Platform:** Splunk Enterprise 
+**Environment:** corp.lab
+
+---
+
+## Purpose
+
+RUNBOOK-001 defines the standard analyst workflow for beginning a SOC monitoring shift.
+
+The objective is to establish environment health before beginning normal security monitoring.
+
+An analyst should determine:
+
+```text
+Are monitored systems reporting?
+
+Is important security telemetry available?
+
+Is there authentication activity requiring review?
+
+Is unusual remote access occurring?
+
+Is PowerShell activity elevated?
+
+Have privileged groups changed?
+
+Are there detection-relevant events requiring investigation?
+```
+
+---
+
+# Workflow
+
+```text
+Start Analyst Shift
+       |
+       v
+Open SOC-OPS-001
+       |
+       v
+Validate Reporting Hosts
+       |
+       v
+Review Telemetry Status
+       |
+       v
+Review Detection Telemetry Health
+       |
+       v
+Review Authentication Activity
+       |
+       v
+Review Remote Network Logons
+       |
+       v
+Review PowerShell Activity
+       |
+       v
+Review Privileged Changes
+       |
+       v
+Review Detection-Relevant Activity
+       |
+       v
+Investigate Anomalies
+       |
+       v
+Begin Normal Monitoring
+```
+
+---
+
+# Step 1 — Open SOC-OPS-001
+
+Open:
+
+```text
+SOC Operations & Detection Health
+```
+
+Default review period:
+
+```text
+Last 24 Hours
+```
+
+A shorter timeframe may be used when investigating recent activity.
+
+---
+
+# Step 2 — Validate Reporting Hosts
+
+Review:
+
+```text
+Telemetry Health — Reporting Hosts
+```
+
+Confirm expected active systems are represented.
+
+Expected systems depend on which lab VMs are currently powered on.
+
+### Investigate If
+
+- An expected powered-on endpoint is absent
+- A host has unexpectedly stopped reporting
+- Event volume is significantly different from normal lab activity
+
+---
+
+# Step 3 — Review Telemetry Status
+
+Review:
+
+```text
+Telemetry Status
+```
+
+Status definitions:
+
+| Status | Definition |
+|---|---|
+| HEALTHY | Last event ≤ 5 minutes |
+| DELAYED | Last event 5–15 minutes |
+| STALE | Last event > 15 minutes |
+
+### HEALTHY
+
+No telemetry-health action required.
+
+### DELAYED
+
+Verify whether the endpoint is:
+
+- Powered on
+- Network connected
+- Actively generating telemetry
+
+Continue monitoring.
+
+### STALE
+
+Determine whether the host is expected to be active.
+
+If active, investigate the telemetry path.
+
+---
+
+# Step 4 — Review Detection Telemetry Health
+
+Open:
+
+```text
+Detection Telemetry Health
+```
+
+Review the last observed timestamps for:
+
+```text
+4624 — Windows Logon
+4625 — Failed Authentication
+4104 — PowerShell
+4698 — Scheduled Task
+4728 — Group Membership Change
+```
+
+Do not automatically classify an absent event type as a sensor failure.
+
+Some telemetry is activity-dependent.
+
+---
+
+# Step 5 — Review Failed Authentication
+
+Open:
+
+```text
+Failed Authentication by Account
+```
+
+Look for:
+
+- Repeated failures
+- Administrative accounts
+- Unexpected usernames
+- Sudden increases
+- Accounts with failures followed by successful authentication
+
+### Potential Follow-Up
+
+Pivot into:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625)
+| sort _time
+| table _time host EventCode TargetUserName IpAddress LogonType
+```
+
+---
+
+# Step 6 — Review Remote Network Authentication
+
+Open:
+
+```text
+Remote Network Logons
+```
+
+Review:
+
+```text
+TargetUserName
+IpAddress
+Network-logon volume
+```
+
+Look for:
+
+- Unexpected source IP addresses
+- Administrative account usage
+- New source/account combinations
+- One source accessing multiple endpoints
+- Activity inconsistent with expected administration
+
+---
+
+# Step 7 — Review PowerShell Activity
+
+Review:
+
+```text
+PowerShell Activity by Host
+```
+
+and:
+
+```text
+PowerShell Activity Timeline
+```
+
+Look for:
+
+- Unexpected hosts
+- Sudden activity spikes
+- PowerShell activity following remote authentication
+- Activity associated with an existing investigation
+
+PowerShell execution itself does not establish malicious activity.
+
+---
+
+# Step 8 — Review Privileged Group Changes
+
+Review:
+
+```text
+Recent Privileged Group Changes
+```
+
+and:
+
+```text
+Domain Admin Membership Changes
+```
+
+Determine:
+
+```text
+Who performed the change?
+Which account was added?
+Which group was modified?
+Was the change expected?
+Was the activity authorized?
+```
+
+Unexpected privileged-group modification should receive immediate analyst review.
+
+---
+
+# Step 9 — Review Detection-Relevant Activity
+
+Open:
+
+```text
+Detection-Relevant Event Activity
+```
+
+This panel provides visibility into underlying events associated with detection logic.
+
+It does not represent actual alert-trigger counts.
+
+Review unusually high or unexpected activity associated with:
+
+```text
+DET-002
+DET-003
+DET-004
+DET-005
+DET-006
+```
+
+---
+
+# Step 10 — Review Host Activity
+
+Review:
+
+```text
+Security Events by Host
+```
+
+and:
+
+```text
+Telemetry Coverage by Host
+```
+
+Look for:
+
+- Unexpectedly active endpoints
+- Significant differences between hosts
+- Hosts generating unusually limited telemetry
+- Sudden changes in event diversity
+
+---
+
+# Step 11 — Review MITRE ATT&CK Coverage
+
+Review:
+
+```text
+MITRE ATT&CK Coverage
+```
+
+This panel is primarily an analytic inventory rather than a live threat indicator.
+
+Use it to understand which ATT&CK behaviors are represented by the current detection portfolio.
+
+---
+
+# Step 12 — Investigate Anomalies
+
+If suspicious activity is identified:
+
+```text
+Dashboard Observation
+       |
+       v
+Identify Host
+       |
+       v
+Identify Account
+       |
+       v
+Identify Source
+       |
+       v
+Establish Timeline
+       |
+       v
+Review Related Events
+       |
+       v
+Check Existing Detections
+       |
+       v
+Determine Authorization
+       |
+       +---------------------+
+       |                     |
+       v                     v
+Expected                Suspicious
+       |                     |
+       v                     v
+Document               Investigate
+and Close              / Escalate
+```
+
+---
+
+# Telemetry Troubleshooting Workflow
+
+If an expected active host is stale:
+
+```text
+Host Appears STALE
+       |
+       v
+Confirm VM / Host Is Running
+       |
+       v
+Confirm Network Connectivity
+       |
+       v
+Confirm Domain Connectivity
+       |
+       v
+Check Splunk Forwarder
+       |
+       v
+Check Local Windows Events
+       |
+       v
+Compare Local Event Time
+With Splunk Last-Seen Time
+       |
+       v
+Identify Ingestion Delay
+or Collection Failure
+```
+
+---
+
+# Domain Connectivity Check
+
+For domain-joined workstations:
+
+```powershell
+Test-ComputerSecureChannel -Verbose
+```
+
+Expected:
+
+```text
+True
+```
+
+A broken domain secure channel should be treated as an infrastructure issue unless additional evidence indicates security relevance.
+
+---
+
+# Splunk Forwarder Check
+
+On the affected Windows endpoint:
+
+```powershell
+Get-Service SplunkForwarder
+```
+
+Expected:
+
+```text
+Running
+```
+
+If the endpoint has local events but Splunk is not receiving them, investigate the forwarding path.
+
+---
+
+# Analyst Decision Matrix
+
+| Observation | Initial Action |
+|---|---|
+| Expected host absent | Validate host and forwarder |
+| Host telemetry stale | Investigate ingestion |
+| Multiple failed logons | Review account/source |
+| Unexpected network logon | Investigate remote source |
+| PowerShell spike | Review scripts/activity |
+| Remote logon followed by PowerShell | Review CORR-002 context |
+| Unexpected privileged change | Immediate investigation |
+| Missing activity-dependent EventCode | Verify before treating as failure |
+
+---
+
+# Escalation Criteria
+
+Activity should receive additional investigation when one or more of the following are observed:
+
+- Unexpected administrative account activity
+- Repeated authentication failures
+- Successful authentication following suspicious failures
+- Remote authentication from an unexpected source
+- Remote authentication followed by PowerShell
+- Unexpected privileged group modification
+- Suspicious PowerShell behavior
+- Multiple related detection behaviors
+- Unexplained telemetry loss from an active endpoint
+
+---
+
+# Shift-Start Completion Criteria
+
+The shift-start review is complete when the analyst has:
+
+```text
+[ ] Reviewed reporting hosts
+[ ] Reviewed telemetry freshness
+[ ] Reviewed detection telemetry health
+[ ] Reviewed failed authentication
+[ ] Reviewed remote network authentication
+[ ] Reviewed PowerShell activity
+[ ] Reviewed privileged group changes
+[ ] Reviewed detection-relevant activity
+[ ] Reviewed endpoint activity
+[ ] Identified or cleared anomalies
+```
+
+---
+
+# Operational Principle
+
+Telemetry health must be established before relying on detection results.
+
+```text
+No Alert
+```
+
+does not necessarily mean:
+
+```text
+No Malicious Activity
+```
+
+if the telemetry required by the detection is unavailable.
+
+Therefore:
+
+```text
+Telemetry Health
+       |
+       v
+Detection Confidence
+       |
+       v
+Analyst Decision
+```
+
+---
+
+# Related Artifacts
+
+```text
+SOC-OPS-001
+SOC Operations & Detection Health Dashboard
+
+CORR-002
+Remote Network Logon Followed by PowerShell
+
+HUNT-001
+Suspicious Windows Post-Authentication Activity
+```
+
+---
+
+# Status
+
+```text
+Runbook ID:
+RUNBOOK-001
+
+Name:
+SOC Shift Start
+
+Associated Dashboard:
+SOC-OPS-001
+
+Status:
+ACTIVE
+```
