@@ -1,0 +1,570 @@
+# Sprint 30 — SOC Operations Dashboard & Detection Health Monitoring
+
+**Status:** Complete 
+**Artifact:** SOC-OPS-001 
+**Runbook:** RUNBOOK-001 
+**Environment:** corp.lab 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Sprint 30 transitioned the SOC lab from individual detection engineering and threat-hunting workflows into centralized SOC operational monitoring.
+
+Previous sprints established:
+
+- Windows security telemetry collection
+- Detection engineering
+- MITRE ATT&CK mapping
+- Detection correlation
+- Incident investigation
+- Detection tuning
+- Threat hunting
+- Detection opportunity development
+- Cross-event correlation engineering
+
+Sprint 30 created a centralized Splunk dashboard designed to provide analysts with operational visibility into:
+
+- Telemetry ingestion health
+- Windows security activity
+- Authentication activity
+- Remote network authentication
+- PowerShell activity
+- Privileged account changes
+- Detection-relevant telemetry
+- Endpoint activity
+- MITRE ATT&CK coverage
+- Detection telemetry health
+
+The resulting operational artifact is:
+
+```text
+SOC-OPS-001 — SOC Operations & Detection Health Dashboard
+```
+
+A supporting analyst workflow was also created:
+
+```text
+RUNBOOK-001 — SOC Shift Start
+```
+
+---
+
+## SOC Operations Architecture
+
+```text
+Windows Endpoints / Domain Controller
+              |
+              v
+       Windows Telemetry
+              |
+              v
+      Splunk Forwarders
+              |
+              v
+      Splunk Enterprise
+              |
+              v
++----------------------------------+
+|           SOC-OPS-001            |
+|                                  |
+| Telemetry Health                 |
+| Authentication Activity          |
+| Remote Network Logons            |
+| PowerShell Activity              |
+| Privileged Changes               |
+| Detection-Relevant Events        |
+| Host Activity                    |
+| ATT&CK Coverage                  |
++----------------------------------+
+              |
+              v
+         SOC Analyst
+```
+
+---
+
+## Telemetry Health Monitoring
+
+The first dashboard capability provides visibility into systems currently reporting telemetry.
+
+### Reporting Hosts
+
+```spl
+index=*
+| stats count as events latest(_time) as last_event by host
+| convert ctime(last_event)
+| sort host
+```
+
+This provides:
+
+- Reporting host
+- Event volume
+- Most recent event
+
+---
+
+## Telemetry Status
+
+A basic ingestion-health classification was implemented using:
+
+```spl
+index=*
+| stats latest(_time) as last_event by host
+| eval age_seconds=now()-last_event
+| eval status=case(
+age_seconds<=300,"HEALTHY",
+age_seconds<=900,"DELAYED",
+true(),"STALE")
+| convert ctime(last_event)
+| table host last_event status
+| sort host
+```
+
+Lab-defined thresholds:
+
+| Event Age | Status |
+|---|---|
+| ≤ 5 minutes | HEALTHY |
+| 5–15 minutes | DELAYED |
+| > 15 minutes | STALE |
+
+These thresholds are intended for lab operational visibility and do not represent universal production standards.
+
+---
+
+## Windows Security Telemetry Monitoring
+
+The dashboard monitors several security-relevant Windows Event IDs:
+
+| Event ID | Description |
+|---:|---|
+| 4624 | Successful Logon |
+| 4625 | Failed Logon |
+| 4104 | PowerShell Script Block Logging |
+| 4698 | Scheduled Task Creation |
+| 4728 | Security-Enabled Global Group Membership Change |
+
+Telemetry volume can be reviewed using:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| eval telemetry=case(
+EventCode=4624,"Successful Logon",
+EventCode=4625,"Failed Logon",
+EventCode=4104,"PowerShell",
+EventCode=4698,"Scheduled Task",
+EventCode=4728,"Group Membership Change",
+true(),"Other")
+| stats count by EventCode telemetry
+| sort EventCode
+```
+
+---
+
+## Authentication Monitoring
+
+### Failed Authentication
+
+```spl
+index=* EventCode=4625
+| stats count as failed_logons by TargetUserName
+| sort - failed_logons
+```
+
+This provides analyst visibility into accounts generating authentication failures.
+
+---
+
+## Remote Network Authentication
+
+Remote network authentication monitoring uses the previously tuned network-logon methodology:
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| stats count as network_logons by TargetUserName IpAddress
+| sort - network_logons
+```
+
+This provides visibility into:
+
+- Target accounts
+- Remote source addresses
+- Network authentication volume
+
+---
+
+## PowerShell Monitoring
+
+### PowerShell Activity by Host
+
+```spl
+index=* EventCode=4104
+| stats count as powershell_events by host
+| sort - powershell_events
+```
+
+### PowerShell Activity Timeline
+
+```spl
+index=* EventCode=4104
+| timechart span=1h count as powershell_events
+```
+
+The timeline provides visibility into changes or spikes in PowerShell activity.
+
+---
+
+## Privileged Group Monitoring
+
+Security-enabled global group membership changes are monitored using:
+
+```spl
+index=* EventCode=4728
+| sort - _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+Domain Admin-related activity can be isolated using:
+
+```spl
+index=* EventCode=4728 "Domain Admins"
+| sort - _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+---
+
+## Detection-Relevant Event Activity
+
+The dashboard provides visibility into telemetry associated with existing detection logic.
+
+```spl
+index=* ((EventCode=4625) OR (EventCode=4104) OR (EventCode=4698) OR (EventCode=4728) OR (EventCode=4624 AND LogonType=3))
+| eval detection=case(
+EventCode=4625,"DET-002",
+EventCode=4104,"DET-003",
+EventCode=4698,"DET-004",
+EventCode=4728,"DET-005",
+EventCode=4624 AND LogonType=3 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1","DET-006",
+true(),"Other")
+| where detection!="Other"
+| stats count as matching_events by detection
+| sort detection
+```
+
+### Important Distinction
+
+This panel represents:
+
+```text
+Events matching detection-relevant behavior
+```
+
+It does **not** represent:
+
+```text
+Actual alert trigger count
+```
+
+This distinction prevents the dashboard from overstating detection activity.
+
+---
+
+## MITRE ATT&CK Coverage
+
+A static coverage inventory was incorporated into the dashboard.
+
+```spl
+| makeresults
+| eval coverage="DET-001|Discovery|T1046;DET-002|Credential Access|T1110;DET-003|Execution|T1059.001;DET-004|Persistence|T1053.005;DET-005|Privilege Escalation / Persistence|T1098.007;DET-006|Lateral Movement|T1021;CORR-001|Multi-Stage|Multiple;CORR-002|Lateral Movement + Execution|T1021 + T1059.001"
+| makemv delim=";" coverage
+| mvexpand coverage
+| rex field=coverage "(?<analytic>[^|]+)\|(?<tactic>[^|]+)\|(?<technique>.+)"
+| table analytic tactic technique
+```
+
+The panel provides an analyst-facing overview of the ATT&CK coverage represented by the lab's detection engineering work.
+
+---
+
+## SOC Metrics
+
+Several single-value operational metrics were created.
+
+### Security Events
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats count as total_security_events
+```
+
+### Remote Network Logons
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| stats count as remote_network_logons
+```
+
+### PowerShell Events
+
+```spl
+index=* EventCode=4104
+| stats count as powershell_events
+```
+
+### Privileged Group Changes
+
+```spl
+index=* EventCode=4728
+| stats count as privileged_group_changes
+```
+
+---
+
+## Host Activity Monitoring
+
+Security-event volume by endpoint is displayed using:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats count as security_events by host
+| sort - security_events
+```
+
+Telemetry diversity is monitored using:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats dc(EventCode) as event_types values(EventCode) as observed_event_codes by host
+| sort - event_types
+```
+
+This provides visibility into both event volume and the variety of security telemetry received from individual endpoints.
+
+---
+
+## Detection Telemetry Health
+
+The following query provides a basic view of when important telemetry was last observed:
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats latest(_time) as last_seen by EventCode
+| eval telemetry=case(
+EventCode=4624,"Windows Logon",
+EventCode=4625,"Failed Authentication",
+EventCode=4104,"PowerShell",
+EventCode=4698,"Scheduled Task",
+EventCode=4728,"Group Membership Change")
+| eval age_hours=round((now()-last_seen)/3600,2)
+| eval status=case(
+age_hours<=24,"OBSERVED",
+true(),"NOT RECENTLY OBSERVED")
+| convert ctime(last_seen)
+| table EventCode telemetry last_seen age_hours status
+| sort EventCode
+```
+
+---
+
+## Dashboard Organization
+
+SOC-OPS-001 was organized into four primary operational sections.
+
+### SOC Metrics
+
+```text
+Security Events
+Remote Network Logon Count
+PowerShell Event Count
+Privileged Group Changes
+```
+
+### Telemetry Health
+
+```text
+Telemetry Status
+Detection Telemetry Health
+```
+
+### Security Activity
+
+```text
+Failed Authentication by Account
+Remote Network Logons
+PowerShell Activity Timeline
+Recent Privileged Group Changes
+```
+
+### SOC Context
+
+```text
+Detection-Relevant Event Activity
+Security Events by Host
+Telemetry Coverage by Host
+MITRE ATT&CK Coverage
+```
+
+---
+
+## Dashboard Validation
+
+Fresh controlled activity was generated to validate dashboard responsiveness.
+
+Validation included:
+
+```text
+PowerShell activity
++
+Remote network authentication
+```
+
+Relevant dashboard panels were refreshed to verify that newly ingested telemetry was represented.
+
+---
+
+## Analyst Operational Workflow
+
+Sprint 30 introduced a formal shift-start workflow:
+
+```text
+Start Analyst Shift
+       |
+       v
+Open SOC-OPS-001
+       |
+       v
+Review Reporting Hosts
+       |
+       v
+Review Telemetry Health
+       |
+       v
+Review Authentication Activity
+       |
+       v
+Review Remote Network Logons
+       |
+       v
+Review PowerShell Activity
+       |
+       v
+Review Privilege Changes
+       |
+       v
+Review Detection-Relevant Activity
+       |
+       v
+Investigate Anomalies
+       |
+       v
+Begin Normal Monitoring
+```
+
+The complete workflow is documented in:
+
+```text
+RUNBOOK-001 — SOC Shift Start
+```
+
+---
+
+## Dashboard Limitations
+
+SOC-OPS-001 has several documented limitations:
+
+1. Detection-relevant event counts do not represent actual alert-trigger counts.
+2. An EventCode that does not appear may represent either no activity or missing telemetry.
+3. Event IDs 4625 and 4698 have demonstrated inconsistent historical availability in the lab.
+4. The dashboard only evaluates telemetry received by Splunk.
+5. The dashboard does not independently validate endpoint audit configuration.
+6. HEALTHY, DELAYED, and STALE thresholds are lab-defined operational thresholds.
+7. MITRE ATT&CK coverage is an inventory of implemented analytics rather than dynamically generated ATT&CK coverage.
+
+---
+
+## Evidence
+
+Sprint 30 evidence may include:
+
+```text
+screenshots/sprint-30/
+├── 01-telemetry-health.png
+├── 02-mitre-coverage.png
+├── 03-detection-health.png
+└── 04-soc-dashboard.png
+```
+
+If the complete dashboard requires multiple screenshots:
+
+```text
+04-soc-dashboard-top.png
+05-soc-dashboard-bottom.png
+```
+
+Only screenshots actually captured during implementation should be committed.
+
+---
+
+## Artifacts Created
+
+```text
+SOC-OPS-001
+SOC Operations & Detection Health Dashboard
+
+RUNBOOK-001
+SOC Shift Start
+```
+
+---
+
+## Skills Demonstrated
+
+- Splunk dashboard development
+- SOC operational monitoring
+- Telemetry health monitoring
+- Detection health monitoring
+- Windows event analysis
+- Authentication monitoring
+- PowerShell monitoring
+- Privileged-account monitoring
+- MITRE ATT&CK coverage visualization
+- SOC metrics development
+- Analyst workflow design
+- Runbook development
+- Detection engineering operations
+
+---
+
+## Outcome
+
+Sprint 30 expanded the project beyond individual analytics into centralized SOC operations.
+
+```text
+Security Telemetry
+       |
+       v
+Detection Engineering
+       |
+       v
+Correlations
+       |
+       v
+Threat Hunting
+       |
+       v
+SOC-OPS-001
+       |
+       v
+RUNBOOK-001
+       |
+       v
+Operational SOC Monitoring
+```
+
+**Sprint 30 Status: COMPLETE**
