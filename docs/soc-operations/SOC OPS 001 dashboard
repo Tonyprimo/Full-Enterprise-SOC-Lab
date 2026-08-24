@@ -1,0 +1,555 @@
+# SOC-OPS-001 — SOC Operations & Detection Health Dashboard
+
+**Status:** Operational 
+**Artifact ID:** SOC-OPS-001 
+**Platform:** Splunk Enterprise 
+**Environment:** corp.lab 
+**Supporting Runbook:** RUNBOOK-001
+
+---
+
+## Purpose
+
+SOC-OPS-001 provides centralized operational visibility into the SOC lab.
+
+The dashboard is designed to answer five primary analyst questions:
+
+```text
+1. Are monitored systems reporting telemetry?
+
+2. Is important security telemetry reaching Splunk?
+
+3. What security-relevant activity is occurring?
+
+4. Which endpoints and accounts are generating activity?
+
+5. What detection and ATT&CK coverage exists?
+```
+
+SOC-OPS-001 complements individual detections and correlation rules by providing an environment-level operational view.
+
+---
+
+## Primary Use Cases
+
+SOC-OPS-001 supports:
+
+- Analyst shift-start review
+- Telemetry health validation
+- Authentication monitoring
+- Remote network access review
+- PowerShell activity monitoring
+- Privileged group monitoring
+- Detection-relevant event review
+- Endpoint activity analysis
+- Detection telemetry health review
+- MITRE ATT&CK coverage review
+- Incident-investigation pivots
+
+---
+
+# Dashboard Panels
+
+## Telemetry Health — Reporting Hosts
+
+### Purpose
+
+Identify systems currently sending events to Splunk and determine when each host last reported.
+
+### SPL
+
+```spl
+index=*
+| stats count as events latest(_time) as last_event by host
+| convert ctime(last_event)
+| sort host
+```
+
+### Analyst Use
+
+Unexpected absence of a normally active host may indicate:
+
+- Powered-off system
+- Splunk Forwarder issue
+- Network connectivity problem
+- Endpoint failure
+- Logging configuration problem
+
+---
+
+## Telemetry Status
+
+### Purpose
+
+Provide a simplified operational classification of telemetry freshness.
+
+### SPL
+
+```spl
+index=*
+| stats latest(_time) as last_event by host
+| eval age_seconds=now()-last_event
+| eval status=case(
+age_seconds<=300,"HEALTHY",
+age_seconds<=900,"DELAYED",
+true(),"STALE")
+| convert ctime(last_event)
+| table host last_event status
+| sort host
+```
+
+### Status Model
+
+| Age | Status |
+|---|---|
+| ≤ 300 seconds | HEALTHY |
+| 301–900 seconds | DELAYED |
+| > 900 seconds | STALE |
+
+These are lab-defined thresholds.
+
+---
+
+## Security Telemetry by Event Type
+
+### Purpose
+
+Display volume for security-relevant Windows telemetry.
+
+### SPL
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| eval telemetry=case(
+EventCode=4624,"Successful Logon",
+EventCode=4625,"Failed Logon",
+EventCode=4104,"PowerShell",
+EventCode=4698,"Scheduled Task",
+EventCode=4728,"Group Membership Change",
+true(),"Other")
+| stats count by EventCode telemetry
+| sort EventCode
+```
+
+---
+
+## Failed Authentication by Account
+
+### Purpose
+
+Identify accounts generating Windows authentication failures.
+
+### SPL
+
+```spl
+index=* EventCode=4625
+| stats count as failed_logons by TargetUserName
+| sort - failed_logons
+```
+
+### Analyst Review
+
+Investigate unexpected concentrations of failures involving:
+
+- Administrative accounts
+- Service accounts
+- Dormant accounts
+- Unusual usernames
+- Repeated failures followed by successful authentication
+
+---
+
+## Remote Network Logons
+
+### Purpose
+
+Monitor successful network authentication from non-local source addresses.
+
+### SPL
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| stats count as network_logons by TargetUserName IpAddress
+| sort - network_logons
+```
+
+### Detection Relationship
+
+This panel uses the same foundational telemetry associated with:
+
+```text
+DET-006
+```
+
+and:
+
+```text
+CORR-002
+```
+
+---
+
+## PowerShell Activity by Host
+
+### SPL
+
+```spl
+index=* EventCode=4104
+| stats count as powershell_events by host
+| sort - powershell_events
+```
+
+### Purpose
+
+Identify which endpoints are generating PowerShell Script Block telemetry.
+
+---
+
+## PowerShell Activity Timeline
+
+### SPL
+
+```spl
+index=* EventCode=4104
+| timechart span=1h count as powershell_events
+```
+
+### Purpose
+
+Provide visual identification of:
+
+- PowerShell activity spikes
+- Periods of elevated PowerShell usage
+- Changes from normal activity patterns
+
+PowerShell activity alone is not considered malicious.
+
+---
+
+## Recent Privileged Group Changes
+
+### SPL
+
+```spl
+index=* EventCode=4728
+| sort - _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+### Purpose
+
+Provide visibility into security-enabled global group membership changes.
+
+---
+
+## Domain Admin Membership Changes
+
+### SPL
+
+```spl
+index=* EventCode=4728 "Domain Admins"
+| sort - _time
+| table _time host SubjectUserName MemberName GroupName
+```
+
+### Purpose
+
+Highlight changes specifically involving the Domain Admins group.
+
+---
+
+## Detection-Relevant Event Activity
+
+### SPL
+
+```spl
+index=* ((EventCode=4625) OR (EventCode=4104) OR (EventCode=4698) OR (EventCode=4728) OR (EventCode=4624 AND LogonType=3))
+| eval detection=case(
+EventCode=4625,"DET-002",
+EventCode=4104,"DET-003",
+EventCode=4698,"DET-004",
+EventCode=4728,"DET-005",
+EventCode=4624 AND LogonType=3 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1","DET-006",
+true(),"Other")
+| where detection!="Other"
+| stats count as matching_events by detection
+| sort detection
+```
+
+### Interpretation
+
+This panel represents:
+
+```text
+Underlying events associated with detection logic
+```
+
+It does not represent:
+
+```text
+Triggered alerts
+```
+
+An event matching the underlying telemetry requirements does not necessarily satisfy the complete detection rule.
+
+---
+
+# MITRE ATT&CK Coverage
+
+## Purpose
+
+Provide an analyst-facing inventory of ATT&CK techniques represented by the detection portfolio.
+
+### SPL
+
+```spl
+| makeresults
+| eval coverage="DET-001|Discovery|T1046;DET-002|Credential Access|T1110;DET-003|Execution|T1059.001;DET-004|Persistence|T1053.005;DET-005|Privilege Escalation / Persistence|T1098.007;DET-006|Lateral Movement|T1021;CORR-001|Multi-Stage|Multiple;CORR-002|Lateral Movement + Execution|T1021 + T1059.001"
+| makemv delim=";" coverage
+| mvexpand coverage
+| rex field=coverage "(?<analytic>[^|]+)\|(?<tactic>[^|]+)\|(?<technique>.+)"
+| table analytic tactic technique
+```
+
+### Interpretation
+
+This is a static coverage inventory.
+
+It represents:
+
+```text
+Implemented analytic coverage
+```
+
+rather than:
+
+```text
+Observed attack activity
+```
+
+---
+
+# SOC Metrics
+
+## Security Events
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats count as total_security_events
+```
+
+---
+
+## Remote Network Logon Count
+
+```spl
+index=* EventCode=4624 LogonType=3
+| where IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1"
+| stats count as remote_network_logons
+```
+
+---
+
+## PowerShell Event Count
+
+```spl
+index=* EventCode=4104
+| stats count as powershell_events
+```
+
+---
+
+## Privileged Group Changes
+
+```spl
+index=* EventCode=4728
+| stats count as privileged_group_changes
+```
+
+---
+
+# Host Monitoring
+
+## Security Events by Host
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats count as security_events by host
+| sort - security_events
+```
+
+---
+
+## Telemetry Coverage by Host
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats dc(EventCode) as event_types values(EventCode) as observed_event_codes by host
+| sort - event_types
+```
+
+This provides visibility into the diversity of monitored security events received from each system.
+
+---
+
+# Detection Telemetry Health
+
+## SPL
+
+```spl
+index=* (EventCode=4624 OR EventCode=4625 OR EventCode=4104 OR EventCode=4698 OR EventCode=4728)
+| stats latest(_time) as last_seen by EventCode
+| eval telemetry=case(
+EventCode=4624,"Windows Logon",
+EventCode=4625,"Failed Authentication",
+EventCode=4104,"PowerShell",
+EventCode=4698,"Scheduled Task",
+EventCode=4728,"Group Membership Change")
+| eval age_hours=round((now()-last_seen)/3600,2)
+| eval status=case(
+age_hours<=24,"OBSERVED",
+true(),"NOT RECENTLY OBSERVED")
+| convert ctime(last_seen)
+| table EventCode telemetry last_seen age_hours status
+| sort EventCode
+```
+
+---
+
+# Dashboard Layout
+
+## Row 1 — SOC Metrics
+
+```text
++------------------+------------------+------------------+------------------+
+| Security Events  | Remote Network   | PowerShell       | Privileged Group |
+|                  | Logon Count      | Event Count      | Changes          |
++------------------+------------------+------------------+------------------+
+```
+
+## Row 2 — Telemetry Health
+
+```text
+Telemetry Status
+Detection Telemetry Health
+```
+
+## Row 3 — Security Activity
+
+```text
+Failed Authentication by Account
+Remote Network Logons
+PowerShell Activity Timeline
+Recent Privileged Group Changes
+```
+
+## Row 4 — SOC Context
+
+```text
+Detection-Relevant Event Activity
+Security Events by Host
+Telemetry Coverage by Host
+MITRE ATT&CK Coverage
+```
+
+---
+
+# Analyst Workflow
+
+SOC-OPS-001 should be reviewed at the beginning of an analyst shift according to:
+
+```text
+RUNBOOK-001 — SOC Shift Start
+```
+
+The dashboard can also be used during an investigation to quickly establish:
+
+```text
+Host telemetry status
+Authentication activity
+PowerShell activity
+Privilege activity
+Related detection telemetry
+```
+
+---
+
+# Limitations
+
+## Event Presence vs. Sensor Health
+
+If an EventCode is absent, the dashboard cannot always determine whether:
+
+```text
+No qualifying activity occurred
+```
+
+or:
+
+```text
+The telemetry source failed
+```
+
+without additional dedicated sensor-health monitoring.
+
+---
+
+## Detection Activity
+
+Detection-relevant event counts are not alert counts.
+
+---
+
+## Historical Telemetry
+
+Event IDs 4625 and 4698 have demonstrated inconsistent availability within the lab.
+
+---
+
+## Splunk Dependency
+
+SOC-OPS-001 only evaluates data successfully ingested into Splunk.
+
+It does not independently validate Windows audit policy, Sysmon configuration, or Splunk Forwarder configuration.
+
+---
+
+## Thresholds
+
+Telemetry freshness thresholds are lab-defined and would require environment-specific tuning in a production SOC.
+
+---
+
+# Evidence
+
+Recommended evidence:
+
+```text
+screenshots/sprint-30/
+├── 01-telemetry-health.png
+├── 02-mitre-coverage.png
+├── 03-detection-health.png
+└── 04-soc-dashboard.png
+```
+
+---
+
+# Status
+
+```text
+Artifact ID:
+SOC-OPS-001
+
+Name:
+SOC Operations & Detection Health Dashboard
+
+Platform:
+Splunk Enterprise
+
+Operational Workflow:
+RUNBOOK-001
+
+Status:
+OPERATIONAL
+```
