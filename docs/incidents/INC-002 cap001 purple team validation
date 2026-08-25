@@ -1,0 +1,362 @@
+# INC-002 — CAP-001 Purple-Team Validation
+
+**Status:** Closed 
+**Incident ID:** INC-002 
+**Source:** CORR-002 / CAP-001 
+**Environment:** corp.lab 
+**Primary Target:** WIN11-02 
+**Initial Severity:** High
+
+---
+
+## Executive Summary
+
+INC-002 was created during CAP-001, the final purple-team validation of the enterprise SOC lab.
+
+The incident represented a controlled multi-stage Windows security exercise involving:
+
+```text
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+        |
+        v
+Scheduled Task Persistence
+        |
+        v
+Privileged Group Modification
+```
+
+The purpose of the investigation was to validate the complete incident-response workflow against known authorized security activity.
+
+---
+
+## Incident Metadata
+
+| Field | Value |
+|---|---|
+| Incident ID | INC-002 |
+| Source | CORR-002 / CAP-001 |
+| Initial Severity | High |
+| Environment | corp.lab |
+| Target | WIN11-02 |
+| Final Status | Closed |
+| Detection Result | True Positive |
+| Disposition | Benign Positive — Authorized Purple-Team Validation |
+| Containment Required | No |
+| Escalation Required | No |
+
+---
+
+## CAP-F001 — Remote Authentication Followed by PowerShell
+
+### Finding
+
+Remote network authentication occurred on WIN11-02 and was followed by PowerShell execution within the CORR-002 correlation window.
+
+Associated telemetry:
+
+```text
+4624 / Logon Type 3
+4104
+```
+
+Associated analytics:
+
+```text
+DET-006
+DET-003
+CORR-002
+```
+
+### Assessment
+
+The temporal relationship between remote authentication and PowerShell execution increased the investigative significance of the activity.
+
+---
+
+## CAP-F002 — Scheduled Task Persistence
+
+### Finding
+
+A controlled scheduled task was created on WIN11-02.
+
+```text
+Task:
+CAP001-Test
+```
+
+Associated detection:
+
+```text
+DET-004
+```
+
+### Evidence Note
+
+Event ID 4698 has demonstrated inconsistent historical availability within the lab.
+
+If event-level evidence was unavailable during retrospective analysis, the limitation should be retained in the case record rather than reconstructed.
+
+---
+
+## CAP-F003 — Privileged Group Modification
+
+### Finding
+
+A temporary test account:
+
+```text
+cap001test
+```
+
+was added to:
+
+```text
+Domain Admins
+```
+
+Associated detection:
+
+```text
+DET-005
+```
+
+The membership was removed immediately following validation.
+
+---
+
+## Attack Progression
+
+```text
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+        |
+        v
+Scheduled Task Persistence
+        |
+        v
+Privileged Domain Group Modification
+```
+
+---
+
+## MITRE ATT&CK Context
+
+| Stage | Tactic | Technique |
+|---|---|---|
+| Remote Authentication | Lateral Movement | T1021 — Remote Services |
+| PowerShell | Execution | T1059.001 |
+| Scheduled Task | Persistence | T1053.005 |
+| Privileged Modification | Privilege Escalation / Persistence | T1098.007 |
+
+---
+
+## Correlation Analysis
+
+CORR-002 identified the relationship between:
+
+```text
+Remote Network Authentication
+```
+
+and:
+
+```text
+PowerShell Execution
+```
+
+on the same endpoint within:
+
+```text
+600 seconds
+```
+
+Risk:
+
+```text
+65
+```
+
+Severity:
+
+```text
+HIGH
+```
+
+---
+
+## Analyst Investigation Workflow
+
+```text
+CORR-002
+    |
+    v
+Create INC-002
+    |
+    v
+Identify Target
+    |
+    v
+Identify Remote Source
+    |
+    v
+Identify Account
+    |
+    v
+Review PowerShell
+    |
+    v
+Review Persistence
+    |
+    v
+Review Privilege Modification
+    |
+    v
+Determine Scope
+    |
+    v
+Validate Authorization
+    |
+    v
+Determine Disposition
+```
+
+---
+
+## Authorization Validation
+
+The activity was confirmed to be part of:
+
+```text
+CAP-001 — Authorized Purple-Team Validation
+```
+
+No unauthorized compromise occurred.
+
+---
+
+## Detection Classification
+
+The generated security activity was real and was correctly identified by the monitoring controls.
+
+Therefore:
+
+```text
+Detection Result:
+TRUE POSITIVE
+```
+
+The activity itself was authorized.
+
+Therefore:
+
+```text
+Disposition:
+BENIGN POSITIVE — AUTHORIZED PURPLE-TEAM VALIDATION
+```
+
+This incident was not classified as a false positive.
+
+---
+
+## Containment Decision
+
+Containment was not required because the activity was authorized and test artifacts were immediately removed.
+
+If the same sequence had been unauthorized, recommended containment would include:
+
+1. Isolate the affected endpoint.
+2. Disable potentially compromised accounts.
+3. Terminate unauthorized remote sessions.
+4. Review and terminate suspicious PowerShell processes.
+5. Remove malicious scheduled tasks.
+6. Remove unauthorized privileged membership.
+7. Reset affected credentials.
+8. Hunt for additional lateral movement.
+9. Preserve relevant evidence.
+10. Escalate to incident response.
+
+---
+
+## Cleanup Verification
+
+The following artifacts were removed:
+
+```text
+CAP001-Test scheduled task
+cap001test account
+Domain Admin membership
+CAP001 temporary file
+Remote SMB session
+```
+
+---
+
+## Final Disposition
+
+```text
+Incident ID:
+INC-002
+
+Initial Severity:
+HIGH
+
+Detection Result:
+TRUE POSITIVE
+
+Authorization:
+AUTHORIZED SECURITY TESTING
+
+Final Disposition:
+BENIGN POSITIVE
+
+Containment:
+NOT REQUIRED
+
+Escalation:
+NOT REQUIRED
+
+Status:
+CLOSED
+```
+
+---
+
+## Lessons Learned
+
+### Correlation Improves Context
+
+A remote network logon or PowerShell event independently may represent legitimate activity.
+
+Their temporal relationship provides significantly more investigative value.
+
+### Threat Hunts and Detections Complement Each Other
+
+The same activity could be identified using:
+
+```text
+Automated Correlation
++
+Analyst Threat Hunting
+```
+
+### Evidence Gaps Must Be Documented
+
+Known limitations involving Event ID 4698 should remain part of the incident record rather than being hidden.
+
+### Authorized Activity Can Still Be a True Positive
+
+The monitoring logic correctly identified the generated behavior even though the behavior was intentional.
+
+---
+
+## Status
+
+```text
+INC-002 STATUS:
+CLOSED
+```
