@@ -1,0 +1,408 @@
+# VULN-001 — Overly Permissive SMB Share
+
+**Status:** Closed 
+**Severity:** High 
+**Assessment:** VM-001 
+**Asset:** WIN11-02 
+**Category:** Access Control / File Sharing Misconfiguration
+
+---
+
+## Finding Summary
+
+An SMB share on WIN11-02 was configured with Full Control granted to the `Everyone` principal.
+
+The configuration allowed a second authorized workstation to access the share, read shared data, and validate remote write capability.
+
+The finding was created as a controlled vulnerability-management exercise.
+
+---
+
+## Affected Asset
+
+```text
+Host:
+WIN11-02
+
+Environment:
+corp.lab
+
+Service:
+SMB
+
+Share:
+\\WIN11-02\VULN31TEST
+```
+
+---
+
+## Vulnerable Configuration
+
+The test share was created using:
+
+```powershell
+New-SmbShare -Name VULN31TEST -Path C:\VULN31TEST -FullAccess Everyone
+```
+
+This resulted in:
+
+```text
+Principal:
+Everyone
+
+Access Control:
+Allow
+
+Permission:
+Full Control
+```
+
+---
+
+## Discovery
+
+The SMB share was identified using:
+
+```powershell
+Get-SmbShare
+```
+
+Permissions were reviewed using:
+
+```powershell
+Get-SmbShareAccess -Name VULN31TEST
+```
+
+Observed condition:
+
+```text
+Share:
+VULN31TEST
+
+Account:
+Everyone
+
+Access:
+Full
+```
+
+---
+
+## Validation
+
+VULN-001 was validated from:
+
+```text
+WIN11-01
+```
+
+### Share Enumeration
+
+```cmd
+dir \\WIN11-02\VULN31TEST
+```
+
+The remote workstation was able to enumerate the share contents.
+
+---
+
+### Remote Read
+
+```cmd
+type \\WIN11-02\VULN31TEST\test.txt
+```
+
+The file contents were successfully retrieved.
+
+---
+
+### Remote Write
+
+```cmd
+echo Remote write validation > \\WIN11-02\VULN31TEST\remote-test.txt
+```
+
+The remote write succeeded.
+
+This demonstrated that the share-level configuration permitted remote modification.
+
+---
+
+## Security Impact
+
+An equivalent production configuration could allow overly broad access to shared resources.
+
+Potential impact includes:
+
+- Unauthorized data access
+- Unauthorized data modification
+- File replacement
+- File deletion
+- Abuse of shared resources
+- Increased attack surface
+- Increased lateral-movement opportunity
+
+---
+
+## Risk Assessment
+
+### Likelihood
+
+```text
+HIGH
+```
+
+Reason:
+
+```text
+The share was remotely accessible and granted Full Control to
+the Everyone principal.
+```
+
+### Impact
+
+```text
+HIGH
+```
+
+Potential impact included:
+
+```text
+Read
+Write
+Modify
+Delete
+```
+
+### Overall Severity
+
+```text
+HIGH
+```
+
+This rating is based on the lab's configuration-risk model and is not a CVSS score.
+
+---
+
+## ATT&CK Context
+
+Relevant context:
+
+```text
+T1135 — Network Share Discovery
+```
+
+The existence of VULN-001 does not demonstrate that T1135 occurred.
+
+Instead:
+
+```text
+The configuration could increase exposure if an attacker performs
+network-share discovery or gains network access to the host.
+```
+
+---
+
+## Remediation Recommendation
+
+Recommended corrective action:
+
+```text
+Remove the unnecessary SMB share.
+```
+
+For a required production share, an alternative remediation would be:
+
+```text
+Restrict share access to explicitly authorized users or security groups.
+```
+
+---
+
+## Remediation
+
+The share was removed using:
+
+```powershell
+Remove-SmbShare -Name VULN31TEST -Force
+```
+
+---
+
+## Local Verification
+
+Local verification was performed using:
+
+```powershell
+Get-SmbShare -Name VULN31TEST
+```
+
+The share no longer existed.
+
+---
+
+## Remote Retest
+
+WIN11-01 was used to repeat the original access test.
+
+```cmd
+dir \\WIN11-02\VULN31TEST
+```
+
+Result:
+
+```text
+Remote access failed.
+```
+
+The remote read test was also repeated:
+
+```cmd
+type \\WIN11-02\VULN31TEST\test.txt
+```
+
+Result:
+
+```text
+Access failed because the SMB share was no longer available.
+```
+
+---
+
+## Cleanup
+
+The local test directory was removed:
+
+```powershell
+Remove-Item C:\VULN31TEST -Recurse -Force
+```
+
+Cleanup was verified using:
+
+```powershell
+Test-Path C:\VULN31TEST
+```
+
+Expected:
+
+```text
+False
+```
+
+---
+
+## Remediation Verification
+
+```text
+Original Vulnerability:
+Everyone — Full Control SMB Share
+
+Remediation:
+Share Removed
+
+Remote Retest:
+FAILED AS EXPECTED
+
+Vulnerability Present:
+NO
+
+Remediation Successful:
+YES
+```
+
+---
+
+## SLA
+
+Lab remediation policy for a High-severity finding:
+
+```text
+30 days
+```
+
+Actual remediation:
+
+```text
+Same assessment session
+```
+
+SLA status:
+
+```text
+MET
+```
+
+---
+
+## Vulnerability Register Entry
+
+| Field | Value |
+|---|---|
+| ID | VULN-001 |
+| Asset | WIN11-02 |
+| Finding | Overly Permissive SMB Share |
+| Severity | High |
+| Owner | SOC Lab Administrator |
+| Status | Closed |
+| Remediation | Removed unnecessary SMB share |
+| Verification | Remote access failed after remediation |
+| SLA | Met |
+
+---
+
+## Vulnerability Lifecycle
+
+```text
+VULN-001 Created
+      |
+      v
+Everyone — Full Control Confirmed
+      |
+      v
+Remote Read Validated
+      |
+      v
+Remote Write Validated
+      |
+      v
+Risk Rated HIGH
+      |
+      v
+Remediation Approved
+      |
+      v
+SMB Share Removed
+      |
+      v
+Remote Retest
+      |
+      v
+Access Failed
+      |
+      v
+VULN-001 CLOSED
+```
+
+---
+
+## Final Status
+
+```text
+Finding ID:
+VULN-001
+
+Severity:
+HIGH
+
+Original Status:
+OPEN
+
+Remediation:
+COMPLETE
+
+Verification:
+PASS
+
+Final Status:
+CLOSED
+```
