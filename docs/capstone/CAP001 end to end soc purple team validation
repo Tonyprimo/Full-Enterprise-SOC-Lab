@@ -1,0 +1,518 @@
+# CAP-001 — End-to-End SOC Purple-Team Validation
+
+**Status:** Complete 
+**Capstone ID:** CAP-001 
+**Environment:** corp.lab 
+**Primary Source:** WIN11-01 
+**Primary Target:** WIN11-02 
+**Domain Controller:** DC01 
+**SIEM:** SIEM01 / Splunk Enterprise
+
+---
+
+## Purpose
+
+CAP-001 validates the complete security-monitoring lifecycle implemented throughout the enterprise SOC lab.
+
+The exercise was designed to demonstrate that the environment can:
+
+```text
+Generate Activity
+      |
+      v
+Collect Telemetry
+      |
+      v
+Detect Behavior
+      |
+      v
+Correlate Events
+      |
+      v
+Support Threat Hunting
+      |
+      v
+Create an Incident
+      |
+      v
+Investigate Activity
+      |
+      v
+Determine Disposition
+      |
+      v
+Validate SOC Operations
+```
+
+---
+
+## Scenario
+
+The controlled purple-team scenario consisted of:
+
+```text
+Remote Network Authentication
+        |
+        v
+Encoded PowerShell Execution
+        |
+        v
+Scheduled Task Persistence
+        |
+        v
+Privileged Domain Group Modification
+```
+
+All activity was generated within the isolated `corp.lab` environment.
+
+---
+
+## Systems
+
+| System | Function |
+|---|---|
+| DC01 | Active Directory, DNS, Domain Audit Telemetry |
+| WIN11-01 | Controlled Source |
+| WIN11-02 | Monitored Target |
+| SIEM01 | Splunk Enterprise |
+
+---
+
+## Stage 1 — Remote Network Authentication
+
+Remote authentication was initiated from:
+
+```text
+WIN11-01
+```
+
+to:
+
+```text
+WIN11-02
+```
+
+using:
+
+```cmd
+net use \\WIN11-02\IPC$ /user:corp\tadmin *
+```
+
+Relevant telemetry:
+
+```text
+Event ID 4624
+Logon Type 3
+Non-local source address
+```
+
+Associated analytic:
+
+```text
+DET-006 — Suspicious Remote Network Logon
+```
+
+---
+
+## Stage 2 — PowerShell Execution
+
+Encoded PowerShell was executed on WIN11-02.
+
+```powershell
+$cmd='Write-Output "Sprint32 CAP001 Purple Team Test"'
+```
+
+```powershell
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+```
+
+```powershell
+powershell.exe -EncodedCommand $encoded
+```
+
+Relevant telemetry:
+
+```text
+Event ID 4104
+```
+
+Associated analytic:
+
+```text
+DET-003 — Encoded PowerShell Execution
+```
+
+---
+
+## Stage 3 — Persistence
+
+A temporary scheduled task was created:
+
+```text
+CAP001-Test
+```
+
+using:
+
+```cmd
+schtasks /create /tn "CAP001-Test" /tr "cmd.exe /c echo CAP001 >> C:\Windows\Temp\CAP001.txt" /sc once /st 23:59 /f
+```
+
+Associated detection:
+
+```text
+DET-004 — Suspicious Scheduled Task Creation
+```
+
+The lab has a known telemetry limitation involving historical Event ID 4698 availability.
+
+---
+
+## Stage 4 — Privileged Account Modification
+
+A controlled test account:
+
+```text
+cap001test
+```
+
+was created and temporarily added to:
+
+```text
+Domain Admins
+```
+
+Associated telemetry:
+
+```text
+Event ID 4728
+```
+
+Associated detection:
+
+```text
+DET-005 — Privileged Domain Group Membership Change
+```
+
+---
+
+## Immediate Cleanup
+
+The exercise removed all persistent test artifacts.
+
+```text
+Domain Admin Membership:
+REMOVED
+
+Test Account:
+REMOVED
+
+Scheduled Task:
+REMOVED
+
+Test File:
+REMOVED
+
+SMB Session:
+REMOVED
+```
+
+---
+
+## Detection Validation
+
+### DET-006
+
+```text
+Suspicious Remote Network Logon
+
+Status:
+PASS
+```
+
+---
+
+### DET-003
+
+```text
+Encoded PowerShell Execution
+
+Status:
+PASS
+```
+
+---
+
+### DET-004
+
+```text
+Suspicious Scheduled Task Creation
+
+Status:
+VALIDATED WITH KNOWN TELEMETRY LIMITATION
+```
+
+---
+
+### DET-005
+
+```text
+Privileged Domain Group Membership Change
+
+Status:
+PASS
+```
+
+---
+
+## Correlation Validation
+
+CAP-001 exercised:
+
+```text
+CORR-002 — Remote Network Logon Followed by PowerShell
+```
+
+Logic:
+
+```text
+Remote Network Logon
+        |
+        | <= 600 seconds
+        v
+PowerShell Event
+        |
+        v
+Same Endpoint
+        |
+        v
+CORR-002
+```
+
+Result:
+
+```text
+PASS
+```
+
+---
+
+## CORR-002 Implementation
+
+```spl
+index=* ((EventCode=4624 AND LogonType=3) OR EventCode=4104)
+| where EventCode=4104 OR (EventCode=4624 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1")
+| eval activity=case(EventCode=4624,"network_logon",EventCode=4104,"powershell")
+| eval network_time=if(activity="network_logon",_time,null())
+| eval network_account=if(activity="network_logon",TargetUserName,null())
+| eval network_ip=if(activity="network_logon",IpAddress,null())
+| sort 0 host _time
+| streamstats last(network_time) as prior_network_time last(network_account) as prior_account last(network_ip) as prior_source_ip by host
+| where activity="powershell"
+| eval time_difference=_time-prior_network_time
+| where isnotnull(prior_network_time) AND time_difference>=0 AND time_difference<=600
+| eval correlation="CORR-002 - Remote Network Logon Followed by PowerShell"
+| eval risk=65
+| eval severity="HIGH"
+| eval powershell_time=_time
+| convert ctime(prior_network_time) ctime(powershell_time)
+| table host correlation severity risk prior_network_time powershell_time time_difference prior_account prior_source_ip
+```
+
+---
+
+## MITRE ATT&CK Mapping
+
+| Activity | Tactic | Technique |
+|---|---|---|
+| Remote Network Authentication | Lateral Movement | T1021 — Remote Services |
+| PowerShell | Execution | T1059.001 — PowerShell |
+| Scheduled Task | Persistence | T1053.005 — Scheduled Task/Job |
+| Privileged Group Modification | Privilege Escalation / Persistence | T1098.007 — Account Manipulation |
+
+---
+
+## Threat Hunt Validation
+
+The HUNT-001 methodology was applied to CAP-001.
+
+Hunt relationship:
+
+```text
+Remote Network Logon
+        |
+        v
+PowerShell
+```
+
+Result:
+
+```text
+HUNT-001:
+VALIDATED
+```
+
+This confirmed that the activity could be identified through analyst-driven threat hunting as well as automated correlation.
+
+---
+
+## Incident Response
+
+CAP-001 generated:
+
+```text
+INC-002 — CAP-001 Purple-Team Validation
+```
+
+Initial severity:
+
+```text
+HIGH
+```
+
+Final determination:
+
+```text
+Detection Result:
+TRUE POSITIVE
+
+Disposition:
+BENIGN POSITIVE — AUTHORIZED PURPLE-TEAM VALIDATION
+
+Status:
+CLOSED
+```
+
+---
+
+## SOC Dashboard Validation
+
+SOC-OPS-001 was reviewed after CAP-001.
+
+Relevant dashboard areas included:
+
+```text
+Security Events
+Remote Network Logons
+PowerShell Events
+Privileged Group Changes
+Detection-Relevant Activity
+Security Events by Host
+```
+
+Result:
+
+```text
+SOC-OPS-001:
+OPERATIONALLY VALIDATED
+```
+
+---
+
+## Vulnerability Management Regression Test
+
+The previously remediated:
+
+```text
+VULN-001 — Overly Permissive SMB Share
+```
+
+remained closed.
+
+Validation:
+
+```text
+VULN31TEST Share:
+ABSENT
+
+C:\VULN31TEST:
+ABSENT
+```
+
+Result:
+
+```text
+REMEDIATION REGRESSION:
+NONE
+```
+
+---
+
+## Capability Validation
+
+| Capability | Result |
+|---|---|
+| Telemetry Collection | PASS |
+| Endpoint Monitoring | PASS |
+| Authentication Detection | PASS |
+| PowerShell Detection | PASS |
+| Privilege Monitoring | PASS |
+| Persistence Visibility | PASS with known limitation |
+| Correlation | PASS |
+| Threat Hunting | PASS |
+| Incident Response | PASS |
+| Detection Tuning | Previously Validated |
+| SOC Dashboard | PASS |
+| Vulnerability Management | Previously Validated |
+| Remediation Regression | PASS |
+
+---
+
+## Known Limitations
+
+- Historical Event ID 4625 availability has been inconsistent.
+- Historical Event ID 4698 availability has been inconsistent.
+- DET-006 identifies remote network authentication but does not independently prove SMB administrative activity.
+- CORR-002 currently uses broad Event ID 4104 correlation.
+- Several thresholds are lab-defined.
+- The environment is resource constrained.
+- The environment is intentionally isolated.
+- Dashboard telemetry health reflects Splunk ingestion, not complete endpoint health.
+
+---
+
+## Purple-Team Assessment
+
+```text
+Telemetry:
+PASS
+
+Detections:
+PASS
+
+Correlation:
+PASS
+
+Threat Hunting:
+PASS
+
+Incident Response:
+PASS
+
+SOC Operations:
+PASS
+
+Vulnerability Regression:
+PASS
+
+Overall Result:
+SUCCESS
+```
+
+---
+
+## Final Status
+
+```text
+Capstone ID:
+CAP-001
+
+Name:
+End-to-End SOC Purple-Team Validation
+
+Status:
+COMPLETE
+
+Overall Assessment:
+SUCCESS
+```
