@@ -1,0 +1,615 @@
+# Sprint 32 — Final Purple-Team Capstone & SOC Portfolio Closeout
+
+**Status:** Complete 
+**Capstone:** CAP-001 
+**Incident:** INC-002 
+**Environment:** corp.lab 
+**SIEM:** Splunk Enterprise
+
+---
+
+## Objective
+
+Sprint 32 served as the final validation of the 32-sprint enterprise SOC lab.
+
+The capstone was designed to prove that the lab could operate as a complete security lifecycle rather than as a collection of independent exercises.
+
+The final validation incorporated:
+
+- Telemetry ingestion
+- Windows authentication monitoring
+- PowerShell detection
+- Persistence activity
+- Privileged group monitoring
+- Detection engineering
+- Correlation
+- Threat hunting
+- Incident response
+- Detection tuning
+- SOC dashboard operations
+- Vulnerability-management regression testing
+- Purple-team validation
+- Technical documentation
+
+The primary capstone artifact was:
+
+```text
+CAP-001 — End-to-End SOC Purple-Team Validation
+```
+
+The associated incident record was:
+
+```text
+INC-002 — CAP-001 Purple-Team Validation
+```
+
+---
+
+## Capstone Objective
+
+```text
+Validate the SOC lab's ability to generate, ingest, detect, correlate,
+investigate, hunt, prioritize, document, and close a controlled
+multi-stage Windows security scenario.
+```
+
+---
+
+## Environment
+
+| System | Role |
+|---|---|
+| DC01 | Active Directory / DNS / Domain Security Events |
+| WIN11-01 | Controlled Source / Test Workstation |
+| WIN11-02 | Primary Monitored Endpoint / Target |
+| SIEM01 | Splunk Enterprise SIEM |
+| corp.lab | Active Directory Domain |
+
+---
+
+## Pre-Capstone Validation
+
+Before generating security activity, the following were validated:
+
+- DC01 domain services
+- DNS availability
+- WIN11-01 secure channel
+- WIN11-02 secure channel
+- Splunk ingestion
+- Key Windows Event ID availability
+- SOC-OPS-001 dashboard health
+
+The environment was considered operational before the test began.
+
+---
+
+## Controlled Purple-Team Scenario
+
+The final controlled scenario consisted of:
+
+```text
+Remote Network Authentication
+        |
+        v
+Encoded PowerShell Execution
+        |
+        v
+Scheduled Task Persistence
+        |
+        v
+Privileged Group Modification
+```
+
+The scenario exercised multiple security controls and SOC workflows.
+
+---
+
+## Stage 1 — Remote Network Authentication
+
+A controlled remote network session was generated from:
+
+```text
+Source:
+WIN11-01
+
+Target:
+WIN11-02
+
+Account:
+corp\tadmin
+```
+
+using:
+
+```cmd
+net use \\WIN11-02\IPC$ /user:corp\tadmin *
+```
+
+This activity exercised the telemetry associated with:
+
+```text
+DET-006 — Suspicious Remote Network Logon
+```
+
+---
+
+## Stage 2 — PowerShell Execution
+
+Encoded PowerShell activity was generated on WIN11-02.
+
+```powershell
+$cmd='Write-Output "Sprint32 CAP001 Purple Team Test"'
+```
+
+```powershell
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+```
+
+```powershell
+powershell.exe -EncodedCommand $encoded
+```
+
+Expected output:
+
+```text
+Sprint32 CAP001 Purple Team Test
+```
+
+This activity exercised:
+
+```text
+DET-003 — Encoded PowerShell Execution
+```
+
+and:
+
+```text
+CORR-002 — Remote Network Logon Followed by PowerShell
+```
+
+---
+
+## Stage 3 — Scheduled Task Persistence
+
+A controlled scheduled task was created on WIN11-02:
+
+```cmd
+schtasks /create /tn "CAP001-Test" /tr "cmd.exe /c echo CAP001 >> C:\Windows\Temp\CAP001.txt" /sc once /st 23:59 /f
+```
+
+This activity represented:
+
+```text
+DET-004 — Suspicious Scheduled Task Creation
+```
+
+Scheduled-task telemetry has demonstrated inconsistent historical availability within the lab and was documented accordingly where necessary.
+
+---
+
+## Stage 4 — Privileged Group Modification
+
+A temporary domain account was created:
+
+```text
+cap001test
+```
+
+The account was temporarily added to:
+
+```text
+Domain Admins
+```
+
+This generated the activity associated with:
+
+```text
+DET-005 — Privileged Domain Group Membership Change
+```
+
+The account and membership were removed immediately following validation.
+
+---
+
+## Cleanup
+
+All persistent changes created during the controlled exercise were removed.
+
+Cleanup included:
+
+- Removing the temporary Domain Admin membership
+- Removing the CAP001 test account
+- Removing the scheduled task
+- Removing the temporary CAP001 file
+- Removing the remote SMB session
+
+The environment was returned to its pre-test state.
+
+---
+
+## Detection Validation
+
+### DET-006
+
+```text
+Detection:
+Suspicious Remote Network Logon
+
+Result:
+PASS
+```
+
+The remote network authentication was visible using the tuned DET-006 methodology.
+
+---
+
+### DET-003
+
+```text
+Detection:
+Encoded PowerShell Execution
+
+Result:
+PASS
+```
+
+PowerShell telemetry associated with the controlled test was identified.
+
+---
+
+### DET-004
+
+```text
+Detection:
+Suspicious Scheduled Task Creation
+```
+
+Result:
+
+```text
+Validated where supporting telemetry was available.
+```
+
+The lab retains a known historical limitation involving Event ID 4698 availability.
+
+---
+
+### DET-005
+
+```text
+Detection:
+Privileged Domain Group Membership Change
+
+Result:
+PASS
+```
+
+The controlled privileged group modification was identified.
+
+---
+
+## CORR-002 Validation
+
+CORR-002 correlates remote network authentication with subsequent PowerShell execution on the same endpoint.
+
+Final correlation concept:
+
+```text
+Remote Network Logon
+        |
+        | <= 600 seconds
+        v
+PowerShell Execution
+        |
+        v
+CORR-002
+```
+
+The capstone activity satisfied the correlation conditions.
+
+```text
+CORR-002:
+PASS
+```
+
+---
+
+## CORR-002 SPL
+
+```spl
+index=* ((EventCode=4624 AND LogonType=3) OR EventCode=4104)
+| where EventCode=4104 OR (EventCode=4624 AND IpAddress!="-" AND IpAddress!="127.0.0.1" AND IpAddress!="::1")
+| eval activity=case(EventCode=4624,"network_logon",EventCode=4104,"powershell")
+| eval network_time=if(activity="network_logon",_time,null())
+| eval network_account=if(activity="network_logon",TargetUserName,null())
+| eval network_ip=if(activity="network_logon",IpAddress,null())
+| sort 0 host _time
+| streamstats last(network_time) as prior_network_time last(network_account) as prior_account last(network_ip) as prior_source_ip by host
+| where activity="powershell"
+| eval time_difference=_time-prior_network_time
+| where isnotnull(prior_network_time) AND time_difference>=0 AND time_difference<=600
+| eval correlation="CORR-002 - Remote Network Logon Followed by PowerShell"
+| eval risk=65
+| eval severity="HIGH"
+| eval powershell_time=_time
+| convert ctime(prior_network_time) ctime(powershell_time)
+| table host correlation severity risk prior_network_time powershell_time time_difference prior_account prior_source_ip
+```
+
+---
+
+## Threat Hunting Validation
+
+HUNT-001 was reused against the capstone activity.
+
+The hunt successfully demonstrated the relationship:
+
+```text
+Remote Network Authentication
+        |
+        v
+PowerShell Execution
+```
+
+HUNT-001 remained capable of supporting analyst investigation outside of alert-driven workflows.
+
+```text
+HUNT-001:
+Validated Against CAP-001
+```
+
+---
+
+## Incident Response Validation
+
+The capstone generated:
+
+```text
+INC-002 — CAP-001 Purple-Team Validation
+```
+
+Initial severity:
+
+```text
+HIGH
+```
+
+The incident included:
+
+```text
+CAP-F001 — Remote authentication followed by PowerShell
+CAP-F002 — Scheduled task persistence activity
+CAP-F003 — Privileged group modification
+```
+
+Because the activity was intentionally generated:
+
+```text
+Detection Result:
+TRUE POSITIVE
+
+Disposition:
+BENIGN POSITIVE — AUTHORIZED PURPLE-TEAM VALIDATION
+```
+
+Final status:
+
+```text
+CLOSED
+```
+
+---
+
+## SOC Dashboard Validation
+
+SOC-OPS-001 was reviewed after the controlled test.
+
+The dashboard was expected to reflect changes in:
+
+- Security event volume
+- Remote network logon activity
+- PowerShell activity
+- Privileged group changes
+- Detection-relevant activity
+- Host activity
+
+Result:
+
+```text
+SOC-OPS-001:
+VALIDATED AGAINST CAP-001
+```
+
+---
+
+## Vulnerability Remediation Regression Check
+
+Sprint 31 closed:
+
+```text
+VULN-001 — Overly Permissive SMB Share
+```
+
+The capstone verified that the remediation remained in place.
+
+Expected:
+
+```powershell
+Get-SmbShare -Name VULN31TEST
+```
+
+Result:
+
+```text
+Share does not exist.
+```
+
+and:
+
+```powershell
+Test-Path C:\VULN31TEST
+```
+
+Expected:
+
+```text
+False
+```
+
+Result:
+
+```text
+VULN-001:
+REMAINS REMEDIATED
+```
+
+---
+
+## SOC Capability Matrix
+
+| Capability | Artifact | Status |
+|---|---|---|
+| Active Directory Lab | corp.lab | Operational |
+| Windows Telemetry | Windows Logs / Splunk | Operational |
+| Network Detection | DET-001 | Validated |
+| Authentication Detection | DET-002 | Validated |
+| PowerShell Detection | DET-003 | Validated |
+| Persistence Detection | DET-004 | Validated with telemetry limitations |
+| Privilege Detection | DET-005 | Validated |
+| Remote Network Detection | DET-006 | Tuned & Validated |
+| Multi-Stage Correlation | CORR-001 | Validated |
+| Post-Authentication Correlation | CORR-002 | Validated |
+| Incident Response | INC-001 / INC-002 | Validated |
+| Detection Tuning | TUNE-001 | Closed |
+| Threat Hunting | HUNT-001 | Complete |
+| Detection Opportunity | DET-OPP-001 | Implemented |
+| SOC Dashboard | SOC-OPS-001 | Operational |
+| Shift Runbook | RUNBOOK-001 | Active |
+| Vulnerability Management | VM-001 | Active |
+| Vulnerability Remediation | VULN-001 | Closed |
+| Purple-Team Capstone | CAP-001 | Complete |
+
+---
+
+## Known Lab Limitations
+
+1. Event IDs 4625 and 4698 have demonstrated inconsistent historical availability.
+2. Several thresholds are lab-defined and would require tuning for production.
+3. DET-006 identifies suspicious remote network authentication but does not independently prove SMB administrative-share access.
+4. CORR-002 currently uses Event ID 4104 broadly at the correlation layer.
+5. The host system has limited RAM and may not run every VM simultaneously at full performance.
+6. The lab is intentionally isolated and does not depend on general Internet access.
+7. SOC-OPS-001 evaluates telemetry received by Splunk and is not a complete endpoint sensor-health platform.
+8. Some analytics are intentionally simplified for lab-scale implementation and education.
+
+---
+
+## Final Purple-Team Assessment
+
+```text
+CAP-001 Assessment
+
+Telemetry:
+PASS
+
+Remote Network Detection:
+PASS
+
+PowerShell Detection:
+PASS
+
+Privilege Modification Detection:
+PASS
+
+Persistence Detection:
+VALIDATED WITH KNOWN TELEMETRY LIMITATION
+
+Correlation:
+PASS
+
+Threat Hunting:
+PASS
+
+Incident Response:
+PASS
+
+Dashboard Visibility:
+PASS
+
+Vulnerability Remediation Regression:
+PASS
+
+Overall Result:
+SUCCESS
+```
+
+---
+
+## Skills Demonstrated
+
+- Active Directory
+- Windows Server
+- Windows 11
+- Splunk Enterprise
+- Splunk Universal Forwarder
+- Windows Security Event Logs
+- PowerShell Logging
+- Sysmon
+- Detection Engineering
+- SPL Development
+- MITRE ATT&CK
+- Authentication Analysis
+- Lateral Movement Detection
+- PowerShell Detection
+- Persistence Detection
+- Privilege Escalation Detection
+- Correlation Engineering
+- Risk Scoring
+- Threat Hunting
+- Incident Response
+- Detection Tuning
+- False-Positive Reduction
+- SOC Dashboard Development
+- Runbook Development
+- Vulnerability Management
+- Remediation Verification
+- Purple-Team Validation
+- Technical Documentation
+
+---
+
+## Outcome
+
+Sprint 32 demonstrated the complete SOC lifecycle:
+
+```text
+Security Activity
+       |
+       v
+Telemetry
+       |
+       v
+Detection
+       |
+       v
+Correlation
+       |
+       v
+Threat Hunting
+       |
+       v
+Incident Investigation
+       |
+       v
+Disposition
+       |
+       v
+SOC Operational Visibility
+       |
+       v
+Continuous Improvement
+```
+
+**Sprint 32 Status: COMPLETE**
+
+# 32-SPRINT ENTERPRISE SOC LAB — COMPLETE
