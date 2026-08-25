@@ -1,0 +1,591 @@
+# Sprint 31 — Vulnerability Management & Remediation Workflow
+
+**Status:** Complete 
+**Assessment:** VM-001 
+**Primary Finding:** VULN-001 
+**Environment:** corp.lab 
+**Primary Asset:** WIN11-02
+
+---
+
+## Objective
+
+Sprint 31 introduced a formal vulnerability management and remediation workflow into the SOC lab.
+
+The objectives were to:
+
+- Inventory a Windows asset
+- Review basic security configuration
+- Identify a controlled vulnerability
+- Validate the vulnerability from a second endpoint
+- Assess likelihood and impact
+- Assign severity
+- Create a remediation plan
+- Implement remediation
+- Verify remediation
+- Close the vulnerability
+- Document remediation metrics and SLA performance
+
+The primary vulnerability-management artifact created was:
+
+```text
+VM-001 — Windows Configuration Vulnerability Assessment
+```
+
+The controlled finding was:
+
+```text
+VULN-001 — Overly Permissive SMB Share
+```
+
+---
+
+## Assessment Scope
+
+```text
+Assessment ID:
+VM-001
+
+Environment:
+corp.lab
+
+Primary Target:
+WIN11-02
+
+Assessment Type:
+Configuration Vulnerability Management
+
+Status:
+Complete
+```
+
+---
+
+## Asset Inventory
+
+WIN11-02 was inventoried before vulnerability testing.
+
+The assessment reviewed:
+
+- Hostname
+- Windows edition/version
+- OS build
+- IPv4 configuration
+- Default gateway
+- Domain membership
+- Recent Windows hotfixes
+
+Domain membership was validated against:
+
+```text
+corp.lab
+```
+
+---
+
+## Security Baseline Review
+
+Several Windows security configuration areas were reviewed before creating the controlled vulnerability.
+
+### Windows Firewall
+
+Firewall profile status was reviewed using:
+
+```powershell
+Get-NetFirewallProfile | Select-Object Name,Enabled
+```
+
+---
+
+### SMBv1
+
+SMBv1 status was reviewed using:
+
+```powershell
+Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol
+```
+
+SMBv1 was not enabled for testing.
+
+---
+
+### Guest Account
+
+Guest-account status was reviewed using:
+
+```powershell
+Get-LocalUser Guest | Select-Object Name,Enabled
+```
+
+---
+
+### Local Administrators
+
+Local administrative membership was reviewed using:
+
+```powershell
+Get-LocalGroupMember Administrators
+```
+
+No accounts were removed as part of the assessment.
+
+---
+
+### Microsoft Defender
+
+Defender status was reviewed using:
+
+```powershell
+Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled
+```
+
+---
+
+### Windows Updates
+
+Recent hotfixes were reviewed using:
+
+```powershell
+Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 10 HotFixID,InstalledOn
+```
+
+This was treated as a recent-update inventory and not as a complete vulnerability scan.
+
+---
+
+### Remote Desktop
+
+RDP configuration was reviewed using:
+
+```powershell
+Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' | Select-Object fDenyTSConnections
+```
+
+---
+
+## Controlled Vulnerability Creation
+
+A temporary test directory was created on WIN11-02:
+
+```text
+C:\VULN31TEST
+```
+
+A harmless test file was added:
+
+```text
+C:\VULN31TEST\test.txt
+```
+
+The folder was then exposed as an SMB share:
+
+```text
+\\WIN11-02\VULN31TEST
+```
+
+using:
+
+```powershell
+New-SmbShare -Name VULN31TEST -Path C:\VULN31TEST -FullAccess Everyone
+```
+
+This intentionally created:
+
+```text
+Everyone
+Full Control
+```
+
+at the SMB share level.
+
+---
+
+## VULN-001 Discovery
+
+The share was identified using:
+
+```powershell
+Get-SmbShare
+```
+
+Share permissions were reviewed using:
+
+```powershell
+Get-SmbShareAccess -Name VULN31TEST
+```
+
+The vulnerable configuration was:
+
+```text
+Share:
+VULN31TEST
+
+Principal:
+Everyone
+
+Access:
+Full Control
+```
+
+This became:
+
+```text
+VULN-001 — Overly Permissive SMB Share
+```
+
+---
+
+## Remote Validation
+
+The finding was validated from WIN11-01.
+
+The remote share was enumerated using:
+
+```cmd
+dir \\WIN11-02\VULN31TEST
+```
+
+The test file was read remotely using:
+
+```cmd
+type \\WIN11-02\VULN31TEST\test.txt
+```
+
+Remote write capability was tested using:
+
+```cmd
+echo Remote write validation > \\WIN11-02\VULN31TEST\remote-test.txt
+```
+
+The successful test demonstrated that a second endpoint could access and modify data exposed by the overly permissive share.
+
+---
+
+## Security Impact
+
+The finding demonstrated a configuration capable of allowing broad remote access to shared data.
+
+Potential impact in an equivalent production environment could include:
+
+- Unauthorized file access
+- Unauthorized file modification
+- File replacement
+- Data deletion
+- Abuse of shared storage
+- Increased lateral-movement opportunity
+
+The finding did not involve exploitation of a software vulnerability or CVE.
+
+It was classified as an access-control/configuration vulnerability.
+
+---
+
+## Risk Assessment
+
+### Likelihood
+
+```text
+High
+```
+
+Reason:
+
+```text
+The share was network accessible and granted Full Control to the
+Everyone principal.
+```
+
+### Impact
+
+```text
+High
+```
+
+Potential capabilities included:
+
+```text
+Read
+Write
+Modify
+Delete
+```
+
+### Overall Severity
+
+```text
+HIGH
+```
+
+This was a lab-defined configuration-risk assessment and not a CVSS score.
+
+---
+
+## MITRE ATT&CK Context
+
+Relevant ATT&CK context:
+
+```text
+T1135 — Network Share Discovery
+```
+
+The vulnerability itself does not prove that Network Share Discovery occurred.
+
+Instead:
+
+```text
+VULN-001 could increase exposure to network-share discovery and
+subsequent unauthorized share access.
+```
+
+---
+
+## Remediation Plan
+
+Because the share existed only for controlled testing, the selected remediation was:
+
+```text
+Remove the unnecessary SMB share.
+```
+
+A production alternative could include restricting share access to an approved security group.
+
+---
+
+## Remediation
+
+The vulnerable share was removed using:
+
+```powershell
+Remove-SmbShare -Name VULN31TEST -Force
+```
+
+Local verification confirmed the share no longer existed.
+
+```powershell
+Get-SmbShare -Name VULN31TEST
+```
+
+returned no valid share.
+
+---
+
+## Remote Remediation Verification
+
+WIN11-01 was used to retest remote access.
+
+```cmd
+dir \\WIN11-02\VULN31TEST
+```
+
+Remote access failed after remediation.
+
+A second read attempt:
+
+```cmd
+type \\WIN11-02\VULN31TEST\test.txt
+```
+
+also failed.
+
+This confirmed that the vulnerable exposure was removed.
+
+---
+
+## Cleanup
+
+The local test directory was removed:
+
+```powershell
+Remove-Item C:\VULN31TEST -Recurse -Force
+```
+
+Cleanup was verified using:
+
+```powershell
+Test-Path C:\VULN31TEST
+```
+
+Expected:
+
+```text
+False
+```
+
+---
+
+## Vulnerability Closure
+
+Final VULN-001 status:
+
+```text
+Finding ID:
+VULN-001
+
+Name:
+Overly Permissive SMB Share
+
+Asset:
+WIN11-02
+
+Original Permission:
+Everyone — Full Control
+
+Severity:
+High
+
+Remediation:
+Removed unnecessary SMB share
+
+Verification:
+Remote access failed after remediation
+
+Status:
+CLOSED
+```
+
+---
+
+## Remediation Metrics
+
+```text
+Vulnerabilities Identified:
+1
+
+Critical:
+0
+
+High:
+1
+
+Medium:
+0
+
+Low:
+0
+
+Remediated:
+1
+
+Open:
+0
+
+Remediation Success Rate:
+100%
+```
+
+These metrics apply only to the controlled Sprint 31 assessment.
+
+---
+
+## SLA Model
+
+Lab-defined remediation targets:
+
+| Severity | Target Remediation |
+|---|---|
+| Critical | 7 days |
+| High | 30 days |
+| Medium | 60 days |
+| Low | 90 days |
+
+VULN-001:
+
+```text
+Severity:
+High
+
+Target:
+30 days
+
+Actual:
+Same assessment session
+
+SLA:
+Met
+```
+
+---
+
+## Vulnerability Lifecycle
+
+```text
+Asset Inventory
+      |
+      v
+Configuration Assessment
+      |
+      v
+VULN-001 Identified
+      |
+      v
+Remote Exposure Validated
+      |
+      v
+Risk Rated HIGH
+      |
+      v
+Remediation Planned
+      |
+      v
+Share Removed
+      |
+      v
+Remote Retest
+      |
+      v
+Access Failed
+      |
+      v
+VULN-001 CLOSED
+```
+
+---
+
+## Skills Demonstrated
+
+- Vulnerability management
+- Windows asset inventory
+- Security baseline review
+- SMB security
+- Access-control analysis
+- Vulnerability validation
+- Risk assessment
+- Remediation planning
+- Remediation implementation
+- Remediation verification
+- Vulnerability tracking
+- SLA management
+- Security documentation
+
+---
+
+## Outcome
+
+Sprint 31 expanded the lab into vulnerability management and remediation.
+
+```text
+Asset
+   |
+   v
+Assessment
+   |
+   v
+Finding
+   |
+   v
+Validation
+   |
+   v
+Risk
+   |
+   v
+Remediation
+   |
+   v
+Retest
+   |
+   v
+Closure
+```
+
+**Sprint 31 Status: COMPLETE**
